@@ -86,6 +86,8 @@ def mostrar_interfaz_popup_bases(bases_datos, conexion):
     btn_confirmar = ttk.Button(ventana, text="Confirmar", command=confirmar_seleccion)
     btn_confirmar.grid(row=1, column=0, columnspan=2, pady=20)
 
+
+
 def mostrar_interfaz_transacciones(conexion):
     def validar_fecha(fecha):
         try:
@@ -113,7 +115,7 @@ def mostrar_interfaz_transacciones(conexion):
             log_type_var.get(),
             tree,
             fecha_inicio,
-            fecha_fin
+            fecha_fin,
         )
 
     limpiar_interfaz()
@@ -167,6 +169,161 @@ def mostrar_interfaz_transacciones(conexion):
 
     tree.bind("<Double-1>", lambda event: mostrar_detalle_transaccion(conexion, tree.item(tree.selection())["values"]))
 
+def actualizar_transacciones(conexion, show_insert, show_update, show_delete, log_type, tree, date_from, date_to, backup_path=None):
+    # Limpiar la tabla de resultados
+    for item in tree.get_children():
+        tree.delete(item)
+
+    # Construir la lista de operaciones seleccionadas
+    operations = []
+    if show_insert:
+        operations.append('LOP_INSERT_ROWS')
+    if show_update:
+        operations.append('LOP_MODIFY_ROW')
+    if show_delete:
+        operations.append('LOP_DELETE_ROWS')
+
+    if not operations:
+        messagebox.showwarning("Advertencia", "Seleccione al menos una operación.")
+        return
+
+    # Validar y formatear las fechas
+    try:
+        date_from_formatted = datetime.strptime(date_from, "%Y-%m-%d").strftime("%Y/%m/%d 00:00:00")
+        date_to_formatted = datetime.strptime(date_to, "%Y-%m-%d").strftime("%Y/%m/%d 23:59:59")
+    except ValueError as e:
+        messagebox.showerror("Error", f"Formato de fecha inválido. Use el formato YYYY-MM-DD.\n{e}")
+        return
+
+    consulta = ""
+
+    if log_type == "online":
+        try:
+            # Cambiar al contexto de la base de datos EmpleadosDB
+            cursor = conexion.cursor()
+            cursor.execute("USE EmpleadosDB;")
+
+            # Generar la consulta para logs online
+            consulta = f"""
+            SELECT
+                d.Operation AS "Operation",
+                COALESCE(s.name, 'dbo') AS "Schema",
+                COALESCE(d.AllocUnitName, 'Unknown') AS "Object",
+                COALESCE(SUSER_SNAME(TRY_CAST(d.[Transaction SID] AS VARBINARY(85))), SYSTEM_USER, 'Unknown User') AS "User",
+                begin_xact.[Begin Time] AS "Begin Time",
+                commit_xact.[End Time] AS "End Time",
+                d.[Transaction ID] AS "Transaction ID",
+                d.[Current LSN] AS "LSN"
+            FROM
+                fn_dblog(NULL, NULL) AS d
+            LEFT JOIN
+                fn_dblog(NULL, NULL) AS begin_xact
+                ON d.[Transaction ID] = begin_xact.[Transaction ID] AND begin_xact.Operation = 'LOP_BEGIN_XACT'
+            LEFT JOIN
+                fn_dblog(NULL, NULL) AS commit_xact
+                ON d.[Transaction ID] = commit_xact.[Transaction ID] AND commit_xact.Operation = 'LOP_COMMIT_XACT'
+            LEFT JOIN
+                sys.allocation_units au ON d.AllocUnitId = au.allocation_unit_id
+            LEFT JOIN
+                sys.partitions p ON au.container_id = p.partition_id
+            LEFT JOIN
+                sys.objects o ON p.object_id = o.object_id
+            LEFT JOIN
+                sys.schemas s ON o.schema_id = s.schema_id
+            WHERE
+                d.Operation IN ({", ".join(f"'{op}'" for op in operations)})
+                AND s.name IS NOT NULL
+                AND s.name != 'sys'
+                AND d.AllocUnitName IS NOT NULL
+                AND begin_xact.[Begin Time] >= '{date_from_formatted}'
+                AND begin_xact.[Begin Time] <= '{date_to_formatted}'
+            ORDER BY
+                d.[Current LSN];
+            """
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudieron cargar los logs online:\n{e}")
+
+    elif log_type == "backup":
+        backup_path = "/var/opt/mssql/data/EmpleadosDB_Log.bak"
+
+        try:
+            # Habilitar autocommit para el proceso de restore
+            conexion.autocommit = True
+            cursor = conexion.cursor()
+
+            # Cambiar al contexto de la base de datos master
+            cursor.execute("USE master;")
+
+            # Restaurar el transaction log en EmpleadosBackup
+            cursor.execute(f"""
+                RESTORE LOG EmpleadosBackup
+                FROM DISK = '{backup_path}'
+                WITH NORECOVERY;
+            """)
+
+            # Recuperar EmpleadosBackup después del restore del log
+            cursor.execute("RESTORE DATABASE EmpleadosBackup WITH RECOVERY;")
+
+            messagebox.showinfo("Éxito", "El transaction log ha sido restaurado correctamente en 'EmpleadosBackup'.")
+
+            # Generar la consulta para logs en la base restaurada
+            consulta = f"""
+            USE EmpleadosBackup;
+            SELECT
+                d.Operation AS "Operation",
+                COALESCE(s.name, 'dbo') AS "Schema",
+                COALESCE(d.AllocUnitName, 'Unknown') AS "Object",
+                COALESCE(SUSER_SNAME(TRY_CAST(d.[Transaction SID] AS VARBINARY(85))), SYSTEM_USER, 'Unknown User') AS "User",
+                begin_xact.[Begin Time] AS "Begin Time",
+                commit_xact.[End Time] AS "End Time",
+                d.[Transaction ID] AS "Transaction ID",
+                d.[Current LSN] AS "LSN"
+            FROM
+                fn_dblog(NULL, NULL) AS d
+            LEFT JOIN
+                fn_dblog(NULL, NULL) AS begin_xact
+                ON d.[Transaction ID] = begin_xact.[Transaction ID] AND begin_xact.Operation = 'LOP_BEGIN_XACT'
+            LEFT JOIN
+                fn_dblog(NULL, NULL) AS commit_xact
+                ON d.[Transaction ID] = commit_xact.[Transaction ID] AND commit_xact.Operation = 'LOP_COMMIT_XACT'
+            LEFT JOIN
+                sys.allocation_units au ON d.AllocUnitId = au.allocation_unit_id
+            LEFT JOIN
+                sys.partitions p ON au.container_id = p.partition_id
+            LEFT JOIN
+                sys.objects o ON p.object_id = o.object_id
+            LEFT JOIN
+                sys.schemas s ON o.schema_id = s.schema_id
+            WHERE
+                d.Operation IN ({", ".join(f"'{op}'" for op in operations)})
+                AND s.name IS NOT NULL
+                AND s.name != 'sys'
+                AND d.AllocUnitName IS NOT NULL
+                AND begin_xact.[Begin Time] >= '{date_from_formatted}'
+                AND begin_xact.[Begin Time] <= '{date_to_formatted}'
+            ORDER BY
+                d.[Current LSN];
+            """
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo restaurar el transaction log desde el archivo de backup:\n{e}")
+        finally:
+            conexion.autocommit = False
+
+    # Ejecutar la consulta y cargar los resultados
+    try:
+        cursor.execute(consulta)
+        resultados = cursor.fetchall()
+
+        if not resultados:
+            messagebox.showinfo("Información", "No se encontraron transacciones con los filtros seleccionados.")
+        else:
+            for index, row in enumerate(resultados, start=1):
+                clean_row = (index,)
+                for item in row:
+                    clean_row += (str(item).strip("(),'"),)
+                tree.insert("", "end", values=clean_row)
+    except Exception as e:
+        messagebox.showerror("Error", f"No se pudieron cargar las transacciones:\n{e}")
 
 
 def mostrar_detalle_transaccion(conexion, detalle_transaccion):
@@ -556,87 +713,10 @@ def definir_contenido_transaction_info(frame, conexion, transaction_id, operatio
         label.pack()
 
 
-def actualizar_transacciones(conexion, show_insert, show_update, show_delete, log_type, tree, date_from, date_to):
-    for item in tree.get_children():
-        tree.delete(item)
 
-    operations = []
-    if show_insert:
-        operations.append('LOP_INSERT_ROWS')
-    if show_update:
-        operations.append('LOP_MODIFY_ROW')
-    if show_delete:
-        operations.append('LOP_DELETE_ROWS')
 
-    if not operations:
-        messagebox.showwarning("Advertencia", "Seleccione al menos una operación.")
-        return
+#=======================================================================================================
 
-    # Validar y formatear las fechas
-    try:
-        date_from_formatted = datetime.strptime(date_from, "%Y-%m-%d").strftime("%Y/%m/%d 00:00:00")
-        date_to_formatted = datetime.strptime(date_to, "%Y-%m-%d").strftime("%Y/%m/%d 23:59:59")
-    except ValueError as e:
-        messagebox.showerror("Error", f"Formato de fecha inválido. Use el formato YYYY-MM-DD.\n{e}")
-        return
-
-    # Actualizar la consulta con los filtros de fecha
-    consulta = f"""
-    SELECT
-        d.Operation AS "Operation",
-        COALESCE(s.name, 'dbo') AS "Schema",
-        COALESCE(d.AllocUnitName, 'Unknown') AS "Object",
-        COALESCE(SUSER_SNAME(TRY_CAST(d.[Transaction SID] AS VARBINARY(85))), SYSTEM_USER, 'Unknown User') AS "User",
-        begin_xact.[Begin Time] AS "Begin Time",
-        commit_xact.[End Time] AS "End Time",
-        d.[Transaction ID] AS "Transaction ID",
-        d.[Current LSN] AS "LSN"
-    FROM
-        fn_dblog(NULL, NULL) AS d
-    LEFT JOIN
-        fn_dblog(NULL, NULL) AS begin_xact
-        ON d.[Transaction ID] = begin_xact.[Transaction ID] AND begin_xact.Operation = 'LOP_BEGIN_XACT'
-    LEFT JOIN
-        fn_dblog(NULL, NULL) AS commit_xact
-        ON d.[Transaction ID] = commit_xact.[Transaction ID] AND commit_xact.Operation = 'LOP_COMMIT_XACT'
-    LEFT JOIN
-        sys.allocation_units au ON d.AllocUnitId = au.allocation_unit_id
-    LEFT JOIN
-        sys.partitions p ON au.container_id = p.partition_id
-    LEFT JOIN
-        sys.objects o ON p.object_id = o.object_id
-    LEFT JOIN
-        sys.schemas s ON o.schema_id = s.schema_id
-    WHERE
-        d.Operation IN ({", ".join(f"'{op}'" for op in operations)})
-        AND s.name IS NOT NULL
-        AND s.name != 'sys'
-        AND d.AllocUnitName IS NOT NULL
-        AND begin_xact.[Begin Time] >= '{date_from_formatted}'
-        AND begin_xact.[Begin Time] <= '{date_to_formatted}'
-    ORDER BY
-        d.[Current LSN];
-    """
-
-    try:
-        cursor = conexion.cursor()
-        cursor.execute(consulta)
-        resultados = cursor.fetchall()
-
-        if not resultados:
-            messagebox.showinfo("Información", "No se encontraron transacciones con los filtros seleccionados.")
-        else:
-            for index, row in enumerate(resultados, start=1):
-                clean_row = (index,)
-                for item in row:
-                    if isinstance(item, str) and '.' in item:
-                        parts = item.split('.')
-                        if len(parts) > 2:
-                            item = parts[1]
-                    clean_row += (str(item).strip("(),'"),)
-                tree.insert("", "end", values=clean_row)
-    except Exception as e:
-        messagebox.showerror("Error", f"No se pudieron cargar las transacciones:\n{e}")
 
 def conectar():
     servidor = entry_server.get()
@@ -652,6 +732,9 @@ def conectar():
         mostrar_interfaz_popup_bases(bases_datos, conexion)
     else:
         messagebox.showerror("Error", "No se pudo establecer la conexión")
+
+
+
 
 def start_watchdog():
     observer = Observer()
