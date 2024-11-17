@@ -318,9 +318,17 @@ def actualizar_transacciones(conexion, show_insert, show_update, show_delete, lo
             messagebox.showinfo("Información", "No se encontraron transacciones con los filtros seleccionados.")
         else:
             for index, row in enumerate(resultados, start=1):
-                clean_row = (index,)
+                clean_row = [index]
                 for item in row:
-                    clean_row += (str(item).strip("(),'"),)
+
+                    if isinstance(item, str) and "." in item:
+                        parts = item.split(".")
+                        if len(parts) > 1:
+                            clean_row.append(parts[1])
+                        else:
+                            clean_row.append(item)
+                    else:
+                        clean_row.append(item)
                 tree.insert("", "end", values=clean_row)
     except Exception as e:
         messagebox.showerror("Error", f"No se pudieron cargar las transacciones:\n{e}")
