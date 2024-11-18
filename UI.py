@@ -456,12 +456,12 @@ def definir_contenido_row_history(frame, conexion, transaction_id):
         begin_xact.[Begin Time] AS "Date",
         COALESCE(SUSER_SNAME(TRY_CAST(d.[Transaction SID] AS VARBINARY(85))), SYSTEM_USER, 'Unknown User') AS "User Name",
         d.[Current LSN] AS "LSN",
-        CONVERT(VARCHAR(MAX), d.[RowLog Contents 0]) AS "id",
-        CONVERT(VARCHAR(MAX), d.[RowLog Contents 1]) AS "Name",
-        CONVERT(VARCHAR(MAX), d.[RowLog Contents 2]) AS "Description",
-        CONVERT(VARCHAR(MAX), d.[RowLog Contents 3]) AS "Column8",
-        CONVERT(VARCHAR(MAX), d.[RowLog Contents 4]) AS "Column9",
-        CONVERT(VARCHAR(MAX), d.[RowLog Contents 5]) AS "Column10"
+        d.[RowLog Contents 0] AS "id",
+        d.[RowLog Contents 1] AS "Name",
+        d.[RowLog Contents 2] AS "Description",
+        d.[RowLog Contents 3] AS "Column8",
+        d.[RowLog Contents 4] AS "Column9",
+        d.[RowLog Contents 5] AS "Column10"
     FROM
         fn_dblog(NULL, NULL) d
     LEFT JOIN
@@ -513,8 +513,8 @@ def definir_contenido_undo_script(frame, conexion, transaction_id):
     SELECT
         CONCAT(s.name, '.', o.name, '.', c.name) AS "Field",
         d.Operation AS "Operation",
-        CONVERT(VARCHAR(MAX), d.[RowLog Contents 0]) AS "Old Value",
-        CONVERT(VARCHAR(MAX), d.[RowLog Contents 1]) AS "New Value",
+        d.[RowLog Contents 0] AS "Old Value",
+        d.[RowLog Contents 1] AS "New Value",
         o.name AS "Table",
         s.name AS "Schema"
     FROM
@@ -583,8 +583,8 @@ def definir_contenido_redo_script(frame, conexion, transaction_id):
     SELECT
         CONCAT(s.name, '.', o.name, '.', c.name) AS "Field",
         d.Operation AS "Operation",
-        CONVERT(VARCHAR(MAX), d.[RowLog Contents 0]) AS "Old Value",
-        CONVERT(VARCHAR(MAX), d.[RowLog Contents 1]) AS "New Value",
+        d.[RowLog Contents 0] AS "Old Value",
+        d.[RowLog Contents 1] AS "New Value",
         o.name AS "Table",
         s.name AS "Schema"
     FROM
