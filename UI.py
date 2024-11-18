@@ -167,7 +167,8 @@ def mostrar_interfaz_transacciones(conexion):
         tree.column(col, width=159)
     tree.grid(row=1, column=0, padx=2, pady=2)
 
-    tree.bind("<Double-1>", lambda event: mostrar_detalle_transaccion(conexion, tree.item(tree.selection())["values"]))
+
+    tree.bind("<Double-1>", lambda event: mostrar_detalle_transaccion(conexion, tree.item(tree.selection())["values"], log_type_var.get()))
 
 def actualizar_transacciones(conexion, show_insert, show_update, show_delete, log_type, tree, date_from, date_to, backup_path=None):
     # Limpiar la tabla de resultados
@@ -196,14 +197,10 @@ def actualizar_transacciones(conexion, show_insert, show_update, show_delete, lo
         return
 
     consulta = ""
+    cursor = conexion.cursor()
 
     if log_type == "online":
         try:
-            # Cambiar al contexto de la base de datos EmpleadosDB
-            cursor = conexion.cursor()
-            cursor.execute("USE EmpleadosDB;")
-
-            # Generar la consulta para logs online
             consulta = f"""
             SELECT
                 d.Operation AS "Operation",
@@ -243,33 +240,14 @@ def actualizar_transacciones(conexion, show_insert, show_update, show_delete, lo
         except Exception as e:
             messagebox.showerror("Error", f"No se pudieron cargar los logs online:\n{e}")
 
-    elif log_type == "backup":
-        backup_path = "/var/opt/mssql/data/EmpleadosDB_Log.bak"
+    if log_type == "backup":
+        if not backup_path:
+            backup_path = "/var/opt/mssql/data/EmpleadosDB_Log.bak"
 
         try:
-            # Habilitar autocommit para el proceso de restore
-            conexion.autocommit = True
-            cursor = conexion.cursor()
-
-            # Cambiar al contexto de la base de datos master
-            cursor.execute("USE master;")
-
-            # Restaurar el transaction log en EmpleadosBackup
-            cursor.execute(f"""
-                RESTORE LOG EmpleadosBackup
-                FROM DISK = '{backup_path}'
-                WITH NORECOVERY;
-            """)
-
-            # Recuperar EmpleadosBackup después del restore del log
-            cursor.execute("RESTORE DATABASE EmpleadosBackup WITH RECOVERY;")
-
-            messagebox.showinfo("Éxito", "El transaction log ha sido restaurado correctamente en 'EmpleadosBackup'.")
-
-            # Generar la consulta para logs en la base restaurada
+            # Generar la consulta para logs en el archivo de backup
             consulta = f"""
-            USE EmpleadosBackup;
-            SELECT
+                SELECT
                 d.Operation AS "Operation",
                 COALESCE(s.name, 'dbo') AS "Schema",
                 COALESCE(d.AllocUnitName, 'Unknown') AS "Object",
@@ -279,12 +257,39 @@ def actualizar_transacciones(conexion, show_insert, show_update, show_delete, lo
                 d.[Transaction ID] AS "Transaction ID",
                 d.[Current LSN] AS "LSN"
             FROM
-                fn_dblog(NULL, NULL) AS d
+                fn_dump_dblog(
+                    NULL, NULL, N'DISK', 1, N'/var/opt/mssql/data/EmpleadosDB_Log.bak',DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                    DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                    DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                    DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                    DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                    DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                    DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                    DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                    DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT) d
             LEFT JOIN
-                fn_dblog(NULL, NULL) AS begin_xact
+                fn_dump_dblog(
+                NULL, NULL, N'DISK', 1, N'/var/opt/mssql/data/EmpleadosDB_Log.bak',DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT) AS begin_xact
                 ON d.[Transaction ID] = begin_xact.[Transaction ID] AND begin_xact.Operation = 'LOP_BEGIN_XACT'
             LEFT JOIN
-                fn_dblog(NULL, NULL) AS commit_xact
+                fn_dump_dblog(
+                NULL, NULL, N'DISK', 1, N'/var/opt/mssql/data/EmpleadosDB_Log.bak',DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT)  AS commit_xact
                 ON d.[Transaction ID] = commit_xact.[Transaction ID] AND commit_xact.Operation = 'LOP_COMMIT_XACT'
             LEFT JOIN
                 sys.allocation_units au ON d.AllocUnitId = au.allocation_unit_id
@@ -296,18 +301,14 @@ def actualizar_transacciones(conexion, show_insert, show_update, show_delete, lo
                 sys.schemas s ON o.schema_id = s.schema_id
             WHERE
                 d.Operation IN ({", ".join(f"'{op}'" for op in operations)})
-                AND s.name IS NOT NULL
-                AND s.name != 'sys'
-                AND d.AllocUnitName IS NOT NULL
                 AND begin_xact.[Begin Time] >= '{date_from_formatted}'
                 AND begin_xact.[Begin Time] <= '{date_to_formatted}'
             ORDER BY
                 d.[Current LSN];
             """
         except Exception as e:
-            messagebox.showerror("Error", f"No se pudo restaurar el transaction log desde el archivo de backup:\n{e}")
-        finally:
-            conexion.autocommit = False
+            messagebox.showerror("Error", f"No se pudo generar la consulta desde el archivo de backup:\n{e}")
+            return
 
     # Ejecutar la consulta y cargar los resultados
     try:
@@ -334,7 +335,7 @@ def actualizar_transacciones(conexion, show_insert, show_update, show_delete, lo
         messagebox.showerror("Error", f"No se pudieron cargar las transacciones:\n{e}")
 
 
-def mostrar_detalle_transaccion(conexion, detalle_transaccion):
+def mostrar_detalle_transaccion(conexion, detalle_transaccion, log_type):
     ventana_detalle = tk.Toplevel(ventana)
     ventana_detalle.title("Detalle de la Operación")
     ventana_detalle.geometry("800x600")
@@ -348,62 +349,102 @@ def mostrar_detalle_transaccion(conexion, detalle_transaccion):
     # Pestañas vacías o preparadas
     frame_detalles = ttk.Frame(notebook)
     notebook.add(frame_detalles, text="Operation details")
-    definir_contenido_operation_details(frame_detalles, conexion, transaction_id)
+    definir_contenido_operation_details(frame_detalles, conexion, transaction_id, log_type)
 
     frame_historial = ttk.Frame(notebook)
     notebook.add(frame_historial, text="Row history")
-    definir_contenido_row_history(frame_historial, conexion, transaction_id)
+    definir_contenido_row_history(frame_historial, conexion, transaction_id, log_type)
 
 
     frame_undo = ttk.Frame(notebook)
     notebook.add(frame_undo, text="Undo script")
-    definir_contenido_undo_script(frame_undo, conexion, transaction_id)
+    definir_contenido_undo_script(frame_undo, conexion, transaction_id, log_type)
 
     frame_redo = ttk.Frame(notebook)
     notebook.add(frame_redo, text="Redo script")
-    definir_contenido_redo_script(frame_redo, conexion, transaction_id)
+    definir_contenido_redo_script(frame_redo, conexion, transaction_id, log_type)
 
     # Pestaña para la información de la transacción
     operation = detalle_transaccion[1]
     frame_informacion = ttk.Frame(notebook)
     notebook.add(frame_informacion, text="Transaction information")
-    definir_contenido_transaction_info(frame_informacion, conexion, transaction_id, operation)
+    definir_contenido_transaction_info(frame_informacion, conexion, transaction_id, operation, log_type)
 
 
-def definir_contenido_operation_details(frame, conexion, transaction_id):
+def definir_contenido_operation_details(frame, conexion, transaction_id, log_type):
     """Define el contenido de la pestaña Operation details con datos reales obtenidos de la base de datos."""
     # Limpiar el frame antes de agregar los nuevos widgets
     for widget in frame.winfo_children():
         widget.destroy()
 
-    # Consulta SQL para obtener los detalles de la operación con esquema, tabla y columna
-    consulta = f"""
-    SELECT
-        CONCAT(s.name, '.', o.name, '.', c.name) AS "Field", -- esquema.tabla.columna
-        t.name AS "Type",
-        d.[RowLog Contents 0] AS "Old Value",
-        d.[RowLog Contents 1] AS "New Value"
-    FROM
-        fn_dblog(NULL, NULL) d
-    JOIN
-        sys.allocation_units au ON d.AllocUnitId = au.allocation_unit_id
-    JOIN
-        sys.partitions p ON au.container_id = p.partition_id
-    JOIN
-        sys.objects o ON p.object_id = o.object_id
-    JOIN
-        sys.schemas s ON o.schema_id = s.schema_id
-    JOIN
-        sys.columns c ON c.object_id = o.object_id
-    JOIN
-        sys.types t ON c.user_type_id = t.user_type_id
-    WHERE
-        d.[Transaction ID] = '{transaction_id}'
-        AND d.Operation IN ('LOP_MODIFY_ROW', 'LOP_INSERT_ROWS', 'LOP_DELETE_ROWS')
-    ORDER BY
-        d.[Current LSN];
-    """
+    consulta = ""
 
+    # Consulta SQL para obtener los detalles de la operación con esquema, tabla y columna
+    if log_type == "online":
+        consulta = f"""
+        SELECT
+            CONCAT(s.name, '.', o.name, '.', c.name) AS "Field", -- esquema.tabla.columna
+            t.name AS "Type",
+            d.[RowLog Contents 0] AS "Old Value",
+            d.[RowLog Contents 1] AS "New Value"
+        FROM
+            fn_dblog(NULL, NULL) d
+        JOIN
+            sys.allocation_units au ON d.AllocUnitId = au.allocation_unit_id
+        JOIN
+            sys.partitions p ON au.container_id = p.partition_id
+        JOIN
+            sys.objects o ON p.object_id = o.object_id
+        JOIN
+            sys.schemas s ON o.schema_id = s.schema_id
+        JOIN
+            sys.columns c ON c.object_id = o.object_id
+        JOIN
+            sys.types t ON c.user_type_id = t.user_type_id
+        WHERE
+            d.[Transaction ID] = '{transaction_id}'
+            AND d.Operation IN ('LOP_MODIFY_ROW', 'LOP_INSERT_ROWS', 'LOP_DELETE_ROWS')
+        ORDER BY
+            d.[Current LSN];
+        """
+    elif log_type == "backup":
+        consulta = f"""
+
+        SELECT
+            CONCAT(s.name, '.', o.name, '.', c.name) AS "Field", -- esquema.tabla.columna
+            t.name AS "Type",
+            d.[RowLog Contents 0] AS "Old Value",
+            d.[RowLog Contents 1] AS "New Value"
+        FROM
+            fn_dump_dblog(
+                NULL, NULL, N'DISK', 1, N'/var/opt/mssql/data/EmpleadosDB_Log.bak',DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT
+            ) d
+        LEFT JOIN
+            sys.allocation_units au ON d.AllocUnitId = au.allocation_unit_id
+        LEFT JOIN
+            sys.partitions p ON au.container_id = p.partition_id
+        LEFT JOIN
+            sys.objects o ON p.object_id = o.object_id
+        LEFT JOIN
+            sys.schemas s ON o.schema_id = s.schema_id
+        LEFT JOIN
+            sys.columns c ON c.object_id = o.object_id
+        LEFT JOIN
+            sys.types t ON c.user_type_id = t.user_type_id
+        WHERE
+            d.[Transaction ID] = '{transaction_id}'
+            AND d.Operation IN ('LOP_MODIFY_ROW', 'LOP_INSERT_ROWS', 'LOP_DELETE_ROWS')
+        ORDER BY
+            d.[Current LSN];
+        """
     try:
         cursor = conexion.cursor()
         cursor.execute(consulta)
@@ -432,7 +473,7 @@ def definir_contenido_operation_details(frame, conexion, transaction_id):
         label.pack()
 
 
-def definir_contenido_row_history(frame, conexion, transaction_id):
+def definir_contenido_row_history(frame, conexion, transaction_id, log_type):
     """Define el contenido de la pestaña Row history en formato de tabla"""
 
     # Limpiar el frame para agregar nuevos widgets
@@ -449,33 +490,80 @@ def definir_contenido_row_history(frame, conexion, transaction_id):
         tree.heading(col, text=col)
         tree.column(col, anchor="w", width=150)
 
-    # Ejecutar el query para obtener los datos
-    consulta = f"""
-    SELECT
-        d.Operation AS "Operation",
-        begin_xact.[Begin Time] AS "Date",
-        COALESCE(SUSER_SNAME(TRY_CAST(d.[Transaction SID] AS VARBINARY(85))), SYSTEM_USER, 'Unknown User') AS "User Name",
-        d.[Current LSN] AS "LSN",
-        d.[RowLog Contents 0] AS "id",
-        d.[RowLog Contents 1] AS "Name",
-        d.[RowLog Contents 2] AS "Description",
-        d.[RowLog Contents 3] AS "Column8",
-        d.[RowLog Contents 4] AS "Column9",
-        d.[RowLog Contents 5] AS "Column10"
-    FROM
-        fn_dblog(NULL, NULL) d
-    LEFT JOIN
-        fn_dblog(NULL, NULL) AS begin_xact
-        ON d.[Transaction ID] = begin_xact.[Transaction ID]
-        AND begin_xact.Operation = 'LOP_BEGIN_XACT'
-    WHERE
-        d.[Transaction ID] = '{transaction_id}' -- Usar el Transaction ID seleccionado
-        AND d.AllocUnitName NOT LIKE 'sys%'
-        AND d.AllocUnitName != 'Unknown Alloc Unit'
-        AND d.Operation IN ('LOP_INSERT_ROWS', 'LOP_MODIFY_ROW', 'LOP_DELETE_ROWS')
-    ORDER BY
-        d.[Current LSN];
-    """
+    consulta = ""
+
+    if log_type == "online":
+        consulta = f"""
+        SELECT
+            d.Operation AS "Operation",
+            begin_xact.[Begin Time] AS "Date",
+            COALESCE(SUSER_SNAME(TRY_CAST(d.[Transaction SID] AS VARBINARY(85))), SYSTEM_USER, 'Unknown User') AS "User Name",
+            d.[Current LSN] AS "LSN",
+            d.[RowLog Contents 0] AS "id",
+            d.[RowLog Contents 1] AS "Name",
+            d.[RowLog Contents 2] AS "Description",
+            d.[RowLog Contents 3] AS "Column8",
+            d.[RowLog Contents 4] AS "Column9",
+            d.[RowLog Contents 5] AS "Column10"
+        FROM
+            fn_dblog(NULL, NULL) d
+        LEFT JOIN
+            fn_dblog(NULL, NULL) AS begin_xact
+            ON d.[Transaction ID] = begin_xact.[Transaction ID]
+            AND begin_xact.Operation = 'LOP_BEGIN_XACT'
+        WHERE
+            d.[Transaction ID] = '{transaction_id}' -- Usar el Transaction ID seleccionado
+            AND d.AllocUnitName NOT LIKE 'sys%'
+            AND d.AllocUnitName != 'Unknown Alloc Unit'
+            AND d.Operation IN ('LOP_INSERT_ROWS', 'LOP_MODIFY_ROW', 'LOP_DELETE_ROWS')
+        ORDER BY
+            d.[Current LSN];
+        """
+    elif log_type == "backup":
+        consulta = f"""
+        SELECT
+            d.Operation AS "Operation",
+            begin_xact.[Begin Time] AS "Date",
+            COALESCE(SUSER_SNAME(TRY_CAST(d.[Transaction SID] AS VARBINARY(85))), SYSTEM_USER, 'Unknown User') AS "User Name",
+            d.[Current LSN] AS "LSN",
+            d.[RowLog Contents 0] AS "id",
+            d.[RowLog Contents 1] AS "Name",
+            d.[RowLog Contents 2] AS "Description",
+            d.[RowLog Contents 3] AS "Column8",
+            d.[RowLog Contents 4] AS "Column9",
+            d.[RowLog Contents 5] AS "Column10"
+        FROM
+            fn_dump_dblog(
+            NULL, NULL, N'DISK', 1, N'/var/opt/mssql/data/EmpleadosDB_Log.bak',DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+            DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+            DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+            DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+            DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+            DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+            DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+            DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+            DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT) d
+        LEFT JOIN
+            fn_dump_dblog(
+            NULL, NULL, N'DISK', 1, N'/var/opt/mssql/data/EmpleadosDB_Log.bak',DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+            DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+            DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+            DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+            DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+            DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+            DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+            DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+            DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT) AS begin_xact
+            ON d.[Transaction ID] = begin_xact.[Transaction ID]
+            AND begin_xact.Operation = 'LOP_BEGIN_XACT'
+        WHERE
+            d.[Transaction ID] = '{transaction_id}' -- Usar el Transaction ID seleccionado
+            AND d.AllocUnitName NOT LIKE 'sys%'
+            AND d.AllocUnitName != 'Unknown Alloc Unit'
+            AND d.Operation IN ('LOP_INSERT_ROWS', 'LOP_MODIFY_ROW', 'LOP_DELETE_ROWS')
+        ORDER BY
+            d.[Current LSN];
+        """
 
     try:
         cursor = conexion.cursor()
@@ -497,8 +585,7 @@ def definir_contenido_row_history(frame, conexion, transaction_id):
         label.pack()
 
 
-
-def definir_contenido_undo_script(frame, conexion, transaction_id):
+def definir_contenido_undo_script(frame, conexion, transaction_id, log_type):
     """Genera y muestra el script de deshacer para la transacción seleccionada"""
     # Limpiar el frame para agregar nuevos widgets
     for widget in frame.winfo_children():
@@ -508,33 +595,74 @@ def definir_contenido_undo_script(frame, conexion, transaction_id):
     label = ttk.Label(frame, text="Script de deshacer", font=("Arial", 12, "bold"))
     label.pack(anchor="w", padx=10, pady=5)
 
-    # Consulta para obtener los datos de la transacción
-    consulta = f"""
-    SELECT
-        CONCAT(s.name, '.', o.name, '.', c.name) AS "Field",
-        d.Operation AS "Operation",
-        d.[RowLog Contents 0] AS "Old Value",
-        d.[RowLog Contents 1] AS "New Value",
-        o.name AS "Table",
-        s.name AS "Schema"
-    FROM
-        fn_dblog(NULL, NULL) d
-    JOIN
-        sys.allocation_units au ON d.AllocUnitId = au.allocation_unit_id
-    JOIN
-        sys.partitions p ON au.container_id = p.partition_id
-    JOIN
-        sys.objects o ON p.object_id = o.object_id
-    JOIN
-        sys.schemas s ON o.schema_id = s.schema_id
-    JOIN
-        sys.columns c ON o.object_id = c.object_id
-    WHERE
-        d.[Transaction ID] = '{transaction_id}'
-        AND d.Operation IN ('LOP_MODIFY_ROW', 'LOP_INSERT_ROWS', 'LOP_DELETE_ROWS')
-    ORDER BY
-        d.[Current LSN];
-    """
+    consulta = ""
+
+    if log_type == "online":
+
+        consulta = f"""
+        SELECT
+            CONCAT(s.name, '.', o.name, '.', c.name) AS "Field",
+            d.Operation AS "Operation",
+            d.[RowLog Contents 0] AS "Old Value",
+            d.[RowLog Contents 1] AS "New Value",
+            o.name AS "Table",
+            s.name AS "Schema"
+        FROM
+            fn_dblog(NULL, NULL) d
+        JOIN
+            sys.allocation_units au ON d.AllocUnitId = au.allocation_unit_id
+        JOIN
+            sys.partitions p ON au.container_id = p.partition_id
+        JOIN
+            sys.objects o ON p.object_id = o.object_id
+        JOIN
+            sys.schemas s ON o.schema_id = s.schema_id
+        JOIN
+            sys.columns c ON o.object_id = c.object_id
+        WHERE
+            d.[Transaction ID] = '{transaction_id}'
+            AND d.Operation IN ('LOP_MODIFY_ROW', 'LOP_INSERT_ROWS', 'LOP_DELETE_ROWS')
+        ORDER BY
+            d.[Current LSN];
+        """
+
+    elif log_type == "backup":
+        consulta = f"""
+            SELECT
+            CONCAT(s.name, '.', o.name, '.', c.name) AS "Field",
+            d.Operation AS "Operation",
+            d.[RowLog Contents 0] AS "Old Value",
+            d.[RowLog Contents 1] AS "New Value",
+            o.name AS "Table",
+            s.name AS "Schema"
+        FROM
+            fn_dump_dblog(
+                NULL, NULL, N'DISK', 1, N'/var/opt/mssql/data/EmpleadosDB_Log.bak',DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT) d
+        JOIN
+            sys.allocation_units au ON d.AllocUnitId = au.allocation_unit_id
+        JOIN
+            sys.partitions p ON au.container_id = p.partition_id
+        JOIN
+            sys.objects o ON p.object_id = o.object_id
+        JOIN
+            sys.schemas s ON o.schema_id = s.schema_id
+        JOIN
+            sys.columns c ON o.object_id = c.object_id
+        WHERE
+            d.[Transaction ID] = '{transaction_id}'
+            AND d.Operation IN ('LOP_MODIFY_ROW', 'LOP_INSERT_ROWS', 'LOP_DELETE_ROWS')
+        ORDER BY
+            d.[Current LSN];
+
+        """
     try:
         cursor = conexion.cursor()
         cursor.execute(consulta)
@@ -568,7 +696,7 @@ def definir_contenido_undo_script(frame, conexion, transaction_id):
         ttk.Label(frame, text=f"Error al generar el script: {e}").pack(anchor="w", padx=10, pady=5)
 
 
-def definir_contenido_redo_script(frame, conexion, transaction_id):
+def definir_contenido_redo_script(frame, conexion, transaction_id, log_type):
     """Genera y muestra el script de rehacer para la transacción seleccionada"""
     # Limpiar el frame para agregar nuevos widgets
     for widget in frame.winfo_children():
@@ -578,33 +706,71 @@ def definir_contenido_redo_script(frame, conexion, transaction_id):
     label = ttk.Label(frame, text="Script de rehacer", font=("Arial", 12, "bold"))
     label.pack(anchor="w", padx=10, pady=5)
 
-    # Consulta para obtener los datos de la transacción
-    consulta = f"""
-    SELECT
-        CONCAT(s.name, '.', o.name, '.', c.name) AS "Field",
-        d.Operation AS "Operation",
-        d.[RowLog Contents 0] AS "Old Value",
-        d.[RowLog Contents 1] AS "New Value",
-        o.name AS "Table",
-        s.name AS "Schema"
-    FROM
-        fn_dblog(NULL, NULL) d
-    JOIN
-        sys.allocation_units au ON d.AllocUnitId = au.allocation_unit_id
-    JOIN
-        sys.partitions p ON au.container_id = p.partition_id
-    JOIN
-        sys.objects o ON p.object_id = o.object_id
-    JOIN
-        sys.schemas s ON o.schema_id = s.schema_id
-    JOIN
-        sys.columns c ON o.object_id = c.object_id
-    WHERE
-        d.[Transaction ID] = '{transaction_id}'
-        AND d.Operation IN ('LOP_MODIFY_ROW', 'LOP_INSERT_ROWS', 'LOP_DELETE_ROWS')
-    ORDER BY
-        d.[Current LSN];
-    """
+    consulta = ""
+
+    if log_type == "online":
+        consulta = f"""
+        SELECT
+            CONCAT(s.name, '.', o.name, '.', c.name) AS "Field",
+            d.Operation AS "Operation",
+            d.[RowLog Contents 0] AS "Old Value",
+            d.[RowLog Contents 1] AS "New Value",
+            o.name AS "Table",
+            s.name AS "Schema"
+        FROM
+            fn_dblog(NULL, NULL) d
+        JOIN
+            sys.allocation_units au ON d.AllocUnitId = au.allocation_unit_id
+        JOIN
+            sys.partitions p ON au.container_id = p.partition_id
+        JOIN
+            sys.objects o ON p.object_id = o.object_id
+        JOIN
+            sys.schemas s ON o.schema_id = s.schema_id
+        JOIN
+            sys.columns c ON o.object_id = c.object_id
+        WHERE
+            d.[Transaction ID] = '{transaction_id}'
+            AND d.Operation IN ('LOP_MODIFY_ROW', 'LOP_INSERT_ROWS', 'LOP_DELETE_ROWS')
+        ORDER BY
+            d.[Current LSN];
+        """
+    elif log_type == "backup":
+        consulta = f"""
+            SELECT
+            CONCAT(s.name, '.', o.name, '.', c.name) AS "Field",
+            d.Operation AS "Operation",
+            d.[RowLog Contents 0] AS "Old Value",
+            d.[RowLog Contents 1] AS "New Value",
+            o.name AS "Table",
+            s.name AS "Schema"
+        FROM
+            fn_dump_dblog(
+                NULL, NULL, N'DISK', 1, N'/var/opt/mssql/data/EmpleadosDB_Log.bak',DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+                DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT) d
+        JOIN
+            sys.allocation_units au ON d.AllocUnitId = au.allocation_unit_id
+        JOIN
+            sys.partitions p ON au.container_id = p.partition_id
+        JOIN
+            sys.objects o ON p.object_id = o.object_id
+        JOIN
+            sys.schemas s ON o.schema_id = s.schema_id
+        JOIN
+            sys.columns c ON o.object_id = c.object_id
+        WHERE
+            d.[Transaction ID] = '{transaction_id}'
+            AND d.Operation IN ('LOP_MODIFY_ROW', 'LOP_INSERT_ROWS', 'LOP_DELETE_ROWS')
+        ORDER BY
+            d.[Current LSN];"""
+
     try:
         cursor = conexion.cursor()
         cursor.execute(consulta)
@@ -638,8 +804,7 @@ def definir_contenido_redo_script(frame, conexion, transaction_id):
         ttk.Label(frame, text=f"Error al generar el script: {e}").pack(anchor="w", padx=10, pady=5)
 
 
-
-def definir_contenido_transaction_info(frame, conexion, transaction_id, operation):
+def definir_contenido_transaction_info(frame, conexion, transaction_id, operation, log_type):
     """Define el contenido de la pestaña Transaction Information"""
     # Limpiar el frame para agregar nuevos widgets
     for widget in frame.winfo_children():
@@ -651,46 +816,118 @@ def definir_contenido_transaction_info(frame, conexion, transaction_id, operatio
         label.pack()
         return
 
-    # Consulta para obtener los detalles de la operación específica seleccionada
-    consulta = f"""
-    SELECT
-        begin_xact.[Begin Time] AS "Begin Time",
-        CASE
-            WHEN commit_xact.Operation = 'LOP_COMMIT_XACT' THEN 'Committed'
-            WHEN commit_xact.Operation = 'LOP_ABORT_XACT' THEN 'Aborted'
-            ELSE 'In Progress'
-        END AS "State",
-        d.Operation AS "Operation",
-        COALESCE(s.name, 'Unknown') AS "Schema",
-        COALESCE(d.AllocUnitName, 'Unknown') AS "Object",
-        'N/A' AS "Parent Schema",
-        'N/A' AS "Parent Object",
-        COALESCE(SUSER_SNAME(TRY_CAST(d.[Transaction SID] AS VARBINARY(85))), SYSTEM_USER, 'Unknown User') AS "User",
-        CASE
-            WHEN d.[Transaction SID] IS NOT NULL THEN '0x' + CONVERT(VARCHAR(MAX), d.[Transaction SID], 1)
-            ELSE '0x0x01'
-        END AS "User ID"
-    FROM
-        fn_dblog(NULL, NULL) AS d
-    LEFT JOIN
-        fn_dblog(NULL, NULL) AS begin_xact
-        ON d.[Transaction ID] = begin_xact.[Transaction ID] AND begin_xact.Operation = 'LOP_BEGIN_XACT'
-    LEFT JOIN
-        fn_dblog(NULL, NULL) AS commit_xact
-        ON d.[Transaction ID] = commit_xact.[Transaction ID] AND commit_xact.Operation IN ('LOP_COMMIT_XACT', 'LOP_ABORT_XACT')
-    LEFT JOIN
-        sys.allocation_units au ON d.AllocUnitId = au.allocation_unit_id
-    LEFT JOIN
-        sys.partitions p ON au.container_id = p.partition_id
-    LEFT JOIN
-        sys.objects o ON p.object_id = o.object_id
-    LEFT JOIN
-        sys.schemas s ON o.schema_id = s.schema_id
-    WHERE
-        d.[Transaction ID] = '{transaction_id}' AND d.Operation = '{operation}'
-    ORDER BY
-        d.[Current LSN];
-    """
+    consulta = ""
+
+
+    if log_type == "online":
+        consulta = f"""
+        SELECT
+            begin_xact.[Begin Time] AS "Begin Time",
+            CASE
+                WHEN commit_xact.Operation = 'LOP_COMMIT_XACT' THEN 'Committed'
+                WHEN commit_xact.Operation = 'LOP_ABORT_XACT' THEN 'Aborted'
+                ELSE 'In Progress'
+            END AS "State",
+            d.Operation AS "Operation",
+            COALESCE(s.name, 'Unknown') AS "Schema",
+            COALESCE(d.AllocUnitName, 'Unknown') AS "Object",
+            'N/A' AS "Parent Schema",
+            'N/A' AS "Parent Object",
+            COALESCE(SUSER_SNAME(TRY_CAST(d.[Transaction SID] AS VARBINARY(85))), SYSTEM_USER, 'Unknown User') AS "User",
+            CASE
+                WHEN d.[Transaction SID] IS NOT NULL THEN '0x' + CONVERT(VARCHAR(MAX), d.[Transaction SID], 1)
+                ELSE '0x0x01'
+            END AS "User ID"
+        FROM
+            fn_dblog(NULL, NULL) AS d
+        LEFT JOIN
+            fn_dblog(NULL, NULL) AS begin_xact
+            ON d.[Transaction ID] = begin_xact.[Transaction ID] AND begin_xact.Operation = 'LOP_BEGIN_XACT'
+        LEFT JOIN
+            fn_dblog(NULL, NULL) AS commit_xact
+            ON d.[Transaction ID] = commit_xact.[Transaction ID] AND commit_xact.Operation IN ('LOP_COMMIT_XACT', 'LOP_ABORT_XACT')
+        LEFT JOIN
+            sys.allocation_units au ON d.AllocUnitId = au.allocation_unit_id
+        LEFT JOIN
+            sys.partitions p ON au.container_id = p.partition_id
+        LEFT JOIN
+            sys.objects o ON p.object_id = o.object_id
+        LEFT JOIN
+            sys.schemas s ON o.schema_id = s.schema_id
+        WHERE
+            d.[Transaction ID] = '{transaction_id}' AND d.Operation = '{operation}'
+        ORDER BY
+            d.[Current LSN];
+        """
+    elif log_type == "backup":
+        consulta = f"""
+            SELECT
+            begin_xact.[Begin Time] AS "Begin Time",
+            CASE
+                WHEN commit_xact.Operation = 'LOP_COMMIT_XACT' THEN 'Committed'
+                WHEN commit_xact.Operation = 'LOP_ABORT_XACT' THEN 'Aborted'
+                ELSE 'In Progress'
+            END AS "State",
+            d.Operation AS "Operation",
+            COALESCE(s.name, 'Unknown') AS "Schema",
+            COALESCE(d.AllocUnitName, 'Unknown') AS "Object",
+            'N/A' AS "Parent Schema",
+            'N/A' AS "Parent Object",
+            COALESCE(SUSER_SNAME(TRY_CAST(d.[Transaction SID] AS VARBINARY(85))), SYSTEM_USER, 'Unknown User') AS "User",
+            CASE
+                WHEN d.[Transaction SID] IS NOT NULL THEN '0x' + CONVERT(VARCHAR(MAX), d.[Transaction SID], 1)
+                ELSE '0x0x01'
+            END AS "User ID"
+        FROM
+            fn_dump_dblog(
+        NULL, NULL, N'DISK', 1, N'/var/opt/mssql/data/EmpleadosDB_Log.bak',DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT) AS d
+        LEFT JOIN
+            fn_dump_dblog(
+        NULL, NULL, N'DISK', 1, N'/var/opt/mssql/data/EmpleadosDB_Log.bak',DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT)  AS begin_xact
+            ON d.[Transaction ID] = begin_xact.[Transaction ID] AND begin_xact.Operation = 'LOP_BEGIN_XACT'
+        LEFT JOIN
+            fn_dump_dblog(
+        NULL, NULL, N'DISK', 1, N'/var/opt/mssql/data/EmpleadosDB_Log.bak',DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT,
+        DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT)  AS commit_xact
+            ON d.[Transaction ID] = commit_xact.[Transaction ID] AND commit_xact.Operation IN ('LOP_COMMIT_XACT', 'LOP_ABORT_XACT')
+        LEFT JOIN
+            sys.allocation_units au ON d.AllocUnitId = au.allocation_unit_id
+        LEFT JOIN
+            sys.partitions p ON au.container_id = p.partition_id
+        LEFT JOIN
+            sys.objects o ON p.object_id = o.object_id
+        LEFT JOIN
+            sys.schemas s ON o.schema_id = s.schema_id
+        WHERE
+            d.[Transaction ID] = '{transaction_id}' AND d.Operation = '{operation}'
+        ORDER BY
+            d.[Current LSN];
+        """
+
+
     try:
         cursor = conexion.cursor()
         cursor.execute(consulta)
@@ -700,10 +937,12 @@ def definir_contenido_transaction_info(frame, conexion, transaction_id, operatio
             label.pack()
             return
 
-        #quiero que la columna de object soolo muestre lo qeu esta despues del primer punto y antes del segundo
-        resultado [4] = resultado[4].split('.')[1]
+         # Validar si resultado[4] contiene un valor antes de intentar dividir
+        if resultado[4] and '.' in resultado[4]:
+            resultado[4] = resultado[4].split('.')[1]
+        else:
+            resultado[4] = "Unknown"  # Valor predeterminado si no se puede procesar
 
-        # Crear tabla para mostrar la información
         columnas = ["Field", "Value"]
         tree = ttk.Treeview(frame, columns=columnas, show="headings", height=10)
         tree.pack(fill="both", expand=True)
