@@ -501,7 +501,7 @@ def definir_contenido_row_history(frame, conexion, transaction_id, log_type):
             d.[Current LSN] AS "LSN",
             d.[RowLog Contents 0] AS "id",
             d.[RowLog Contents 1] AS "Name",
-            d.[RowLog Contents 2] AS "Description",
+            d.Description AS "Description",
             d.[RowLog Contents 3] AS "Column8",
             d.[RowLog Contents 4] AS "Column9",
             d.[RowLog Contents 5] AS "Column10"
@@ -528,7 +528,7 @@ def definir_contenido_row_history(frame, conexion, transaction_id, log_type):
             d.[Current LSN] AS "LSN",
             d.[RowLog Contents 0] AS "id",
             d.[RowLog Contents 1] AS "Name",
-            d.[RowLog Contents 2] AS "Description",
+            d.Description AS "Description",
             d.[RowLog Contents 3] AS "Column8",
             d.[RowLog Contents 4] AS "Column9",
             d.[RowLog Contents 5] AS "Column10"
@@ -571,13 +571,17 @@ def definir_contenido_row_history(frame, conexion, transaction_id, log_type):
         resultados = cursor.fetchall()
 
         if not resultados:
-            # Mostrar mensaje si no hay datos
             label = ttk.Label(frame, text="No se encontró historial de fila para esta transacción.")
             label.pack()
         else:
-            # Insertar filas en la tabla
+            resultados_ajustados = []
             for row in resultados:
+                row = list(row)
+                resultados_ajustados.append(row)
+
+            for row in resultados_ajustados:
                 tree.insert("", "end", values=row)
+
 
     except Exception as e:
         # Manejar errores
