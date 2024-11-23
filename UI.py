@@ -7,7 +7,7 @@ from watchdog.events import FileSystemEventHandler
 from ConnectDB import conectar_sqlserver
 from tkcalendar import DateEntry
 from datetime import datetime
-
+from DecodeRowLog import decode_rowlog
 
 
 
@@ -725,14 +725,39 @@ def definir_contenido_undo_script(frame, conexion, transaction_id, log_type, bac
 
         undo_script = "BEGIN TRANSACTION;\n"
         for row in resultados:
-            field, operation, old_value, new_value, table, schema = row
+            field, operation, old_value_hex, new_value_hex, table, schema = row
+
+            # Intentar decodificar los valores
+            old_value = decode_rowlog(conexion, schema, table, old_value_hex) if old_value_hex else None
+            new_value = decode_rowlog(conexion, schema, table, new_value_hex) if new_value_hex else None
+
             if operation == "LOP_MODIFY_ROW":
-                undo_script += f"UPDATE [{schema}].[{table}] SET [{field.split('.')[-1]}] = '{old_value}' WHERE [{field.split('.')[-1]}] = '{new_value}';\n"
+                if old_value and new_value:
+                    for col_name in old_value.keys():
+                        undo_script += f"UPDATE [{schema}].[{table}] SET [{col_name}] = '{old_value[col_name]}' WHERE [{col_name}] = '{new_value.get(col_name, '')}';\n"
+                elif old_value or new_value:
+                    undo_script += f"-- Operación MODIFICAR con valores parciales en la tabla [{schema}].[{table}]\n"
+
             elif operation == "LOP_INSERT_ROWS":
-                undo_script += f"DELETE FROM [{schema}].[{table}] WHERE [{field.split('.')[-1]}] = '{new_value}';\n"
+                if new_value:
+                    conditions = ' AND '.join([f"[{col}] = '{val}'" for col, val in new_value.items()])
+                    undo_script += f"DELETE FROM [{schema}].[{table}] WHERE {conditions};\n"
+                elif old_value:
+                    conditions = ' AND '.join([f"[{col}] = '{val}'" for col, val in old_value.items()])
+                    undo_script += f"DELETE FROM [{schema}].[{table}] WHERE {conditions};\n"
+
             elif operation == "LOP_DELETE_ROWS":
-                undo_script += f"INSERT INTO [{schema}].[{table}] ([{field.split('.')[-1]}]) VALUES ('{old_value}');\n"
+                if old_value:
+                    columns = ', '.join([f"[{col}]" for col in old_value.keys()])
+                    values = ', '.join([f"'{val}'" for val in old_value.values()])
+                    undo_script += f"INSERT INTO [{schema}].[{table}] ({columns}) VALUES ({values});\n"
+                elif new_value:
+                    columns = ', '.join([f"[{col}]" for col in new_value.keys()])
+                    values = ', '.join([f"'{val}'" for val in new_value.values()])
+                    undo_script += f"-- Operación DELETE con valores parciales en la tabla [{schema}].[{table}]\n"
+
         undo_script += "COMMIT TRANSACTION;\n"
+
 
         text_widget = tk.Text(frame, wrap="none", height=20, width=80, font=("Fira Code", 16), bg="white", fg="black")
         text_widget.insert("1.0", undo_script)
@@ -847,14 +872,39 @@ def definir_contenido_redo_script(frame, conexion, transaction_id, log_type, bac
 
         redo_script = "BEGIN TRANSACTION;\n"
         for row in resultados:
-            field, operation, old_value, new_value, table, schema = row
+            field, operation, old_value_hex, new_value_hex, table, schema = row
+
+            # Intentar decodificar los valores
+            old_value = decode_rowlog(conexion, schema, table, old_value_hex) if old_value_hex else None
+            new_value = decode_rowlog(conexion, schema, table, new_value_hex) if new_value_hex else None
+
             if operation == "LOP_MODIFY_ROW":
-                redo_script += f"UPDATE [{schema}].[{table}] SET [{field.split('.')[-1]}] = '{new_value}' WHERE [{field.split('.')[-1]}] = '{old_value}';\n"
+                if old_value and new_value:
+                    for col_name in new_value.keys():
+                        redo_script += f"UPDATE [{schema}].[{table}] SET [{col_name}] = '{new_value[col_name]}' WHERE [{col_name}] = '{old_value.get(col_name, '')}';\n"
+                elif old_value or new_value:
+                    redo_script += f"-- Operación MODIFICAR con valores parciales en la tabla [{schema}].[{table}]\n"
+
             elif operation == "LOP_INSERT_ROWS":
-                redo_script += f"INSERT INTO [{schema}].[{table}] ([{field.split('.')[-1]}]) VALUES ('{new_value}');\n"
+                if new_value:
+                    columns = ', '.join([f"[{col}]" for col in new_value.keys()])
+                    values = ', '.join([f"'{val}'" for val in new_value.values()])
+                    redo_script += f"INSERT INTO [{schema}].[{table}] ({columns}) VALUES ({values});\n"
+                elif old_value:
+                    columns = ', '.join([f"[{col}]" for col in old_value.keys()])
+                    values = ', '.join([f"'{val}'" for val in old_value.values()])
+                    redo_script += f"INSERT INTO [{schema}].[{table}] ({columns}) VALUES ({values});\n"
+
             elif operation == "LOP_DELETE_ROWS":
-                redo_script += f"DELETE FROM [{schema}].[{table}] WHERE [{field.split('.')[-1]}] = '{old_value}';\n"
+                    if old_value:
+                        conditions = ' AND '.join([f"[{col}] = '{val}'" for col, val in old_value.items()])
+                        redo_script += f"DELETE FROM [{schema}].[{table}] WHERE {conditions};\n"
+                    elif new_value:
+                        conditions = ' AND '.join([f"[{col}] = '{val}'" for col, val in new_value.items()])
+                        redo_script += f"-- Operación DELETE con valores parciales en la tabla [{schema}].[{table}]\n"
+
         redo_script += "COMMIT TRANSACTION;\n"
+
 
         text_widget = tk.Text(frame, wrap="none", height=20, width=80, font=("Fira Code", 16), bg="white", fg="black")
         text_widget.insert("1.0", redo_script)

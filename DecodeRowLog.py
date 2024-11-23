@@ -32,26 +32,26 @@ def try_decode(data):
         return data.decode('utf-8', errors='replace')
 
 def decode_rowlog(conexion, esquema, tabla, hex_data):
-    """Decodifica un registro de RowLog Contents basado en el esquema de la tabla, con detección automática de codificación."""
+    """Decodifica un registro de RowLog Contents basado en el esquema de la tabla."""
     try:
-        if hex_data.startswith("0x"):
-            hex_data = hex_data[2:]
+        # Verificar que hex_data sea tipo str y convertirlo a bytes
+        if isinstance(hex_data, str) and hex_data.startswith("0x"):
+            hex_data = hex_data[2:]  # Eliminar prefijo '0x'
+        binary_data = bytes.fromhex(hex_data) if isinstance(hex_data, str) else hex_data
 
-
+        # Obtener esquema de la tabla
         esquema_tabla = obtener_esquema_tabla(conexion, esquema, tabla)
 
-        binary_data = bytes.fromhex(hex_data)
-
+        # Procesamiento de RowLog Contents
         status_bits = binary_data[:2]
         print(f"Status Bits: {status_bits.hex()}")
 
-        # Leer Offset al Número de Columnas
         column_offset = int.from_bytes(binary_data[2:4], "little")
         print(f"Offset al Número de Columnas: {column_offset}")
 
         if column_offset >= len(binary_data):
             print("Error: Offset al número de columnas fuera del rango de datos.")
-            return
+            return None
 
         total_columns = int.from_bytes(binary_data[column_offset:column_offset + 2], "little")
         print(f"Total de Columnas: {total_columns}")
@@ -61,30 +61,18 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
         print(f"Bitmap de Nulabilidad: {null_bitmap.hex()}")
 
         var_column_count_offset = column_offset + 2 + null_bitmap_size
-        if var_column_count_offset + 2 > len(binary_data):
-            print("Error: Datos insuficientes para leer el número de columnas de longitud variable.")
-            return
-
         var_column_count = int.from_bytes(binary_data[var_column_count_offset:var_column_count_offset + 2], "little")
         print(f"Número de Columnas de Longitud Variable: {var_column_count}")
 
         var_offsets = []
         offset_start = var_column_count_offset + 2
         for i in range(var_column_count):
-            if offset_start + i * 2 + 2 > len(binary_data):
-                print("Error: Datos insuficientes para leer offsets de columnas variables.")
-                return
             var_offset = int.from_bytes(binary_data[offset_start + i * 2:offset_start + i * 2 + 2], "little")
             var_offsets.append(var_offset)
         print(f"Offsets de Columnas Variables: {var_offsets}")
 
-        if len(var_offsets) != var_column_count:
-            print("Error: Los offsets de columnas variables no coinciden con el número de columnas variables.")
-            return
-
-        variable_data_start = offset_start + len(var_offsets) * 2
-
         decoded_columns = {}
+        variable_data_start = offset_start + len(var_offsets) * 2
         variable_columns = [col for col in esquema_tabla if col[1].lower() in ["varchar", "nvarchar", "text"]]
 
         for idx, col in enumerate(variable_columns):
@@ -93,29 +81,16 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
                 start = var_offsets[idx - 1] if idx > 0 else variable_data_start
                 end = var_offsets[idx] if idx < len(var_offsets) else len(binary_data)
                 if start < end and end <= len(binary_data):
-                    decoded_value = try_decode(binary_data[start:end])
-                    decoded_columns[col_name] = decoded_value
+                    # Detectar y decodificar la codificación adecuada
+                    data_chunk = binary_data[start:end]
+                    decoded_value = try_decode(data_chunk)
+                    decoded_columns[col_name] = decoded_value.strip()
                     print(f"Columna '{col_name}': {decoded_value} (desde {start} hasta {end})")
                 else:
                     print(f"Columna '{col_name}' tiene rangos inválidos (desde {start} hasta {end}).")
-            else:
-                print(f"Columna '{col_name}' no tiene un offset asignado y será ignorada.")
 
-        print(f"Decoded Columns: {decoded_columns}")
         return decoded_columns
 
     except Exception as e:
         print(f"Error al procesar RowLog Contents: {e}")
-
-
-conexion = pyodbc.connect(
-    'DRIVER={ODBC Driver 18 for SQL Server};'
-    'SERVER=localhost;'
-    'DATABASE=EmpleadosDB;'
-    'UID=sa;'
-    'PWD=Pototo2005504;'
-    'TrustServerCertificate=yes;'
-)
-
-rowlog_hex = "30001100230000000120AA4400000000000500000300210026003800C16E67656C526F6A617353757065727669736F7220646520C1726561"
-decode_rowlog(conexion, "RecursosHumanos","Empleados", rowlog_hex)
+        return None
