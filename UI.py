@@ -107,6 +107,13 @@ def mostrar_interfaz_transacciones(conexion):
             messagebox.showerror("Error", "La fecha 'To' no es válida. Usa el formato YYYY-MM-DD.")
             return
 
+        backup_file = combobox_backup.get()
+        if log_type_var.get() == "backup" and not backup_file:
+            messagebox.showerror("Error", "Selecciona un archivo de respaldo (.bak).")
+            return
+
+        backup_file_path = f"/var/opt/mssql/data/{backup_file}" if backup_file else None
+
         actualizar_transacciones(
             conexion,
             var_insert.get(),
@@ -116,7 +123,15 @@ def mostrar_interfaz_transacciones(conexion):
             tree,
             fecha_inicio,
             fecha_fin,
+            backup_file_path if log_type_var.get() == "backup" else None
         )
+
+    def listar_archivos_bak(directorio):
+        """Lista todos los archivos .bak en el directorio especificado."""
+        try:
+            return [archivo for archivo in os.listdir(directorio) if archivo.endswith(".bak")]
+        except FileNotFoundError:
+            return []
 
     limpiar_interfaz()
     ventana.geometry("1620x1000")
@@ -137,21 +152,38 @@ def mostrar_interfaz_transacciones(conexion):
     ttk.Radiobutton(filtros_frame, text="Online transaction log", variable=log_type_var, value="online").grid(row=0, column=3, padx=5)
     ttk.Radiobutton(filtros_frame, text="Backup file", variable=log_type_var, value="backup").grid(row=0, column=4, padx=5)
 
+    ttk.Label(filtros_frame, text="Backup file:").grid(row=0, column=9, padx=5)
+    combobox_backup = ttk.Combobox(filtros_frame, width=14)
+    combobox_backup.grid(row=0, column=10, padx=5)
+
+    def toggle_backup_combobox():
+        if log_type_var.get() == "backup":
+            combobox_backup.config(state="normal")
+        else:
+            combobox_backup.config(state="disabled")
+
+    log_type_var.trace("w", lambda *args: toggle_backup_combobox())
+
     ttk.Label(filtros_frame, text="From (YYYY-MM-DD):").grid(row=0, column=5, padx=5)
-    entry_from = ttk.Entry(filtros_frame, width=12)
+    entry_from = ttk.Entry(filtros_frame, width=8)
     entry_from.insert(0, datetime.now().strftime("%Y-%m-%d"))
     entry_from.grid(row=0, column=6, padx=5)
 
     ttk.Label(filtros_frame, text="To (YYYY-MM-DD):").grid(row=0, column=7, padx=5)
-    entry_to = ttk.Entry(filtros_frame, width=12)
+    entry_to = ttk.Entry(filtros_frame, width=8)
     entry_to.insert(0, datetime.now().strftime("%Y-%m-%d"))
     entry_to.grid(row=0, column=8, padx=5)
 
+    # Listar archivos .bak en el directorio deseado
+    directorio_respaldo = "/Users/coleexz/Documents/docker_shared"
+    archivos_bak = listar_archivos_bak(directorio_respaldo)
+    combobox_backup["values"] = archivos_bak
+
     btn_apply = ttk.Button(filtros_frame, text="Apply", command=aplicar_filtros)
-    btn_apply.grid(row=0, column=9, padx=5)
+    btn_apply.grid(row=0, column=11, padx=3)
 
     btn_desconectar = ttk.Button(filtros_frame, text="Desconectar", command=mostrar_interfaz_conexion)
-    btn_desconectar.grid(row=0, column=10, padx=5)
+    btn_desconectar.grid(row=0, column=12, padx=3)
 
     columnas = [" ", "Operation", "Schema", "Object", "User", "Begin time", "End time", "Transaction ID", "LSN"]
     global tree
@@ -161,13 +193,19 @@ def mostrar_interfaz_transacciones(conexion):
         tree.column(col, width=159)
     tree.grid(row=1, column=0, padx=2, pady=2)
 
+    tree.bind("<Double-1>", lambda event: mostrar_detalle_transaccion(
+        conexion,
+        tree.item(tree.selection())["values"],
+        log_type_var.get(),
+        backup_path=f"/var/opt/mssql/data/{combobox_backup.get()}" if combobox_backup.get() else None
+    ))
 
-    tree.bind("<Double-1>", lambda event: mostrar_detalle_transaccion(conexion, tree.item(tree.selection())["values"], log_type_var.get()))
 
 def actualizar_transacciones(conexion, show_insert, show_update, show_delete, log_type, tree, date_from, date_to, backup_path=None):
     for item in tree.get_children():
         tree.delete(item)
 
+    print('backup_path en actualizar_transacciones: ', backup_path)
     operations = []
     if show_insert:
         operations.append('LOP_INSERT_ROWS')
@@ -251,10 +289,8 @@ def actualizar_transacciones(conexion, show_insert, show_update, show_delete, lo
             messagebox.showerror("Error", f"No se pudieron cargar los logs online:\n{e}")
 
     if log_type == "backup":
-        if not backup_path:
-            backup_path = "/var/opt/mssql/data/EmpleadosDB_Log.bak"
-
         try:
+            print('se ejecuto backup try con el siguietne path', backup_path)
 
             cursor.execute(f"""
                 SELECT *
@@ -313,12 +349,14 @@ def actualizar_transacciones(conexion, show_insert, show_update, show_delete, lo
                     SELECT OBJECT_NAME(p.object_id)
                     FROM sys.allocation_units au
                     JOIN sys.partitions p ON au.container_id = p.hobt_id
-                    WHERE au.allocation_unit_id = d.AllocUnitId
+                WHERE au.allocation_unit_id = d.AllocUnitId
                 ) IS NOT NULL -- Excluir Unknown
+
             ORDER BY
                 d.[Current LSN];
 
             """
+
             cursor.execute(consulta)
             resultados = cursor.fetchall()
 
@@ -345,10 +383,12 @@ def actualizar_transacciones(conexion, show_insert, show_update, show_delete, lo
             messagebox.showerror("Error", f"No se pudieron cargar los logs desde el backup:\n{e}")
 
 
-def mostrar_detalle_transaccion(conexion, detalle_transaccion, log_type):
+def mostrar_detalle_transaccion(conexion, detalle_transaccion, log_type, backup_path=None):
     ventana_detalle = tk.Toplevel(ventana)
     ventana_detalle.title("Detalle de la Operación")
     ventana_detalle.geometry("800x600")
+
+    print('backup_path: ', backup_path)
 
     transaction_id = detalle_transaccion[7]
     schema = detalle_transaccion[2]
@@ -361,24 +401,24 @@ def mostrar_detalle_transaccion(conexion, detalle_transaccion, log_type):
 
     frame_detalles = ttk.Frame(notebook)
     notebook.add(frame_detalles, text="Operation details")
-    definir_contenido_operation_details(frame_detalles, conexion, transaction_id, log_type)
+    definir_contenido_operation_details(frame_detalles, conexion, transaction_id, log_type, backup_path=backup_path)
 
     frame_historial = ttk.Frame(notebook)
     notebook.add(frame_historial, text="Row history")
-    definir_contenido_row_history(frame_historial, conexion, transaction_id, log_type, schema=schema, object_name=object_name)
+    definir_contenido_row_history(frame_historial, conexion, transaction_id, log_type, backup_path=backup_path ,schema=schema, object_name=object_name)
 
     frame_undo = ttk.Frame(notebook)
     notebook.add(frame_undo, text="Undo script")
-    definir_contenido_undo_script(frame_undo, conexion, transaction_id, log_type)
+    definir_contenido_undo_script(frame_undo, conexion, transaction_id, log_type, backup_path=backup_path)
 
     frame_redo = ttk.Frame(notebook)
     notebook.add(frame_redo, text="Redo script")
-    definir_contenido_redo_script(frame_redo, conexion, transaction_id, log_type)
+    definir_contenido_redo_script(frame_redo, conexion, transaction_id, log_type, backup_path=backup_path)
 
     operation = detalle_transaccion[1]
     frame_informacion = ttk.Frame(notebook)
     notebook.add(frame_informacion, text="Transaction information")
-    definir_contenido_transaction_info(frame_informacion, conexion, transaction_id, operation, log_type)
+    definir_contenido_transaction_info(frame_informacion, conexion, transaction_id, operation, log_type, backup_path=backup_path)
 
 
 def definir_contenido_operation_details(frame, conexion, transaction_id, log_type, backup_path=None):
@@ -388,6 +428,8 @@ def definir_contenido_operation_details(frame, conexion, transaction_id, log_typ
 
     consulta = ""
     cursor = conexion.cursor()
+
+    print('backup_path en operation details: ', backup_path)
 
     if log_type == "online":
         consulta = f"""
@@ -417,8 +459,6 @@ def definir_contenido_operation_details(frame, conexion, transaction_id, log_typ
             d.[Current LSN];
         """
     elif log_type == "backup":
-        if not backup_path:
-            backup_path = "/var/opt/mssql/data/EmpleadosDB_Log.bak"
 
         try:
             cursor.execute(f"""
@@ -517,6 +557,7 @@ def definir_contenido_row_history(frame, conexion, transaction_id, log_type, bac
 
     print('schema en row history: ', schema)
     print('object_name en row history: ', object_name)
+    print('backup_path en row history: ', backup_path)
 
     for widget in frame.winfo_children():
         widget.destroy()
@@ -560,9 +601,6 @@ def definir_contenido_row_history(frame, conexion, transaction_id, log_type, bac
             d.[Current LSN];
         """
     elif log_type == "backup":
-        if not backup_path:
-            backup_path = "/var/opt/mssql/data/EmpleadosDB_Log.bak"
-
         try:
             cursor.execute(f"""
                 SELECT *
@@ -657,6 +695,8 @@ def definir_contenido_undo_script(frame, conexion, transaction_id, log_type, bac
     consulta = ""
     cursor = conexion.cursor()
 
+    print('backup_path en undo script: ', backup_path)
+
     if log_type == "online":
         consulta = f"""
         SELECT
@@ -685,9 +725,6 @@ def definir_contenido_undo_script(frame, conexion, transaction_id, log_type, bac
             d.[Current LSN];
         """
     elif log_type == "backup":
-        if not backup_path:
-            backup_path = "/var/opt/mssql/data/EmpleadosDB_Log.bak"
-
         try:
             cursor.execute(f"""
                 SELECT *
@@ -804,6 +841,8 @@ def definir_contenido_redo_script(frame, conexion, transaction_id, log_type, bac
     consulta = ""
     cursor = conexion.cursor()
 
+    print('backup_path en redo script: ', backup_path)
+
     if log_type == "online":
         consulta = f"""
         SELECT
@@ -832,8 +871,6 @@ def definir_contenido_redo_script(frame, conexion, transaction_id, log_type, bac
             d.[Current LSN];
         """
     elif log_type == "backup":
-        if not backup_path:
-            backup_path = "/var/opt/mssql/data/EmpleadosDB_Log.bak"
 
         try:
             cursor.execute(f"""
@@ -955,6 +992,8 @@ def definir_contenido_transaction_info(frame, conexion, transaction_id, operatio
     consulta = ""
     cursor = conexion.cursor()
 
+    print('backup_path en transaction info: ', backup_path)
+
     if log_type == "online":
         consulta = f"""
         SELECT
@@ -996,8 +1035,6 @@ def definir_contenido_transaction_info(frame, conexion, transaction_id, operatio
             d.[Current LSN];
         """
     elif log_type == "backup":
-        if not backup_path:
-            backup_path = "/var/opt/mssql/data/EmpleadosDB_Log.bak"
 
         try:
             cursor.execute(f"""

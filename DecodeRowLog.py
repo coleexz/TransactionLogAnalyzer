@@ -1,4 +1,5 @@
 import pyodbc
+from ConnectDB import conectar_sqlserver
 
 def obtener_esquema_tabla(conexion, esquema, tabla):
     """
@@ -34,20 +35,17 @@ def try_decode(data):
 def decode_rowlog(conexion, esquema, tabla, hex_data):
     """Decodifica un registro de RowLog Contents basado en el esquema de la tabla."""
     try:
-        # Verificar que hex_data sea tipo str y convertirlo a bytes
+
         if isinstance(hex_data, str) and hex_data.startswith("0x"):
-            hex_data = hex_data[2:]  # Eliminar prefijo '0x'
+            hex_data = hex_data[2:]  
         binary_data = bytes.fromhex(hex_data) if isinstance(hex_data, str) else hex_data
 
-        # Obtener esquema de la tabla
+
         esquema_tabla = obtener_esquema_tabla(conexion, esquema, tabla)
 
-        # Procesamiento de RowLog Contents
         status_bits = binary_data[:2]
-        print(f"Status Bits: {status_bits.hex()}")
 
         column_offset = int.from_bytes(binary_data[2:4], "little")
-        print(f"Offset al Número de Columnas: {column_offset}")
 
         if column_offset >= len(binary_data):
             print("Error: Offset al número de columnas fuera del rango de datos.")
@@ -58,18 +56,15 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
 
         null_bitmap_size = (total_columns + 7) // 8
         null_bitmap = binary_data[column_offset + 2:column_offset + 2 + null_bitmap_size]
-        print(f"Bitmap de Nulabilidad: {null_bitmap.hex()}")
 
         var_column_count_offset = column_offset + 2 + null_bitmap_size
         var_column_count = int.from_bytes(binary_data[var_column_count_offset:var_column_count_offset + 2], "little")
-        print(f"Número de Columnas de Longitud Variable: {var_column_count}")
-
         var_offsets = []
+
         offset_start = var_column_count_offset + 2
         for i in range(var_column_count):
             var_offset = int.from_bytes(binary_data[offset_start + i * 2:offset_start + i * 2 + 2], "little")
             var_offsets.append(var_offset)
-        print(f"Offsets de Columnas Variables: {var_offsets}")
 
         decoded_columns = {}
         variable_data_start = offset_start + len(var_offsets) * 2
@@ -94,3 +89,9 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
     except Exception as e:
         print(f"Error al procesar RowLog Contents: {e}")
         return None
+
+#conexion = conectar_sqlserver("localhost", "1433", "sa", "Pototo2005504", "EmpleadosDB")
+
+#hexdata = "0x80584F"
+
+#decode_rowlog(conexion, "RecursosHumanos", "Empleados", hexdata)
