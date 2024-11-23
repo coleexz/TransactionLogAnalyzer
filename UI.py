@@ -612,7 +612,7 @@ def definir_contenido_row_history(frame, conexion, transaction_id, log_type, bac
                 formatted_row = []
                 for index, value in enumerate(row):
                     if isinstance(value, str) and index == 1:
-                        formatted_row.append(value.strip()) 
+                        formatted_row.append(value.strip())
                     else:
                         formatted_row.append(value)
                 tree.insert("", "end", values=formatted_row)
