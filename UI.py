@@ -351,6 +351,10 @@ def mostrar_detalle_transaccion(conexion, detalle_transaccion, log_type):
     ventana_detalle.geometry("800x600")
 
     transaction_id = detalle_transaccion[7]
+    schema = detalle_transaccion[2]
+    print('schema: ', schema)
+    object_name = detalle_transaccion[3]
+    print('object_name: ', object_name)
 
     notebook = ttk.Notebook(ventana_detalle)
     notebook.pack(fill="both", expand=True)
@@ -361,7 +365,7 @@ def mostrar_detalle_transaccion(conexion, detalle_transaccion, log_type):
 
     frame_historial = ttk.Frame(notebook)
     notebook.add(frame_historial, text="Row history")
-    definir_contenido_row_history(frame_historial, conexion, transaction_id, log_type)
+    definir_contenido_row_history(frame_historial, conexion, transaction_id, log_type, schema=schema, object_name=object_name)
 
     frame_undo = ttk.Frame(notebook)
     notebook.add(frame_undo, text="Undo script")
@@ -508,8 +512,11 @@ def definir_contenido_operation_details(frame, conexion, transaction_id, log_typ
         label = ttk.Label(frame, text=f"Error al obtener los detalles de la operación:\n{e}")
         label.pack()
 
-def definir_contenido_row_history(frame, conexion, transaction_id, log_type, backup_path=None):
+def definir_contenido_row_history(frame, conexion, transaction_id, log_type, backup_path=None, schema= None, object_name=None):
     """Define el contenido de la pestaña Row history en formato de tabla"""
+
+    print('schema en row history: ', schema)
+    print('object_name en row history: ', object_name)
 
     for widget in frame.winfo_children():
         widget.destroy()
@@ -621,12 +628,18 @@ def definir_contenido_row_history(frame, conexion, transaction_id, log_type, bac
             label.pack()
         else:
             for row in resultados:
-                formatted_row = []
-                for index, value in enumerate(row):
-                    if isinstance(value, str) and index == 1:
-                        formatted_row.append(value.strip())
-                    else:
-                        formatted_row.append(value)
+                formatted_row = [
+                    row[0],  # Operation
+                    row[1],  # Date
+                    row[2],  # User Name
+                    row[3],  # LSN
+                    decode_rowlog(conexion, schema, object_name, row[4]) if row[4] else "N/A",  # id
+                    decode_rowlog(conexion, schema, object_name, row[5]) if row[5] else "N/A",  # Name
+                    row[6],  # Description
+                    decode_rowlog(conexion, schema, object_name, row[7]) if row[7] else "N/A",  # Column8
+                    decode_rowlog(conexion, schema, object_name, row[8]) if row[8] else "N/A",  # Column9
+                    decode_rowlog(conexion, schema, object_name, row[9]) if row[9] else "N/A",  # Column10
+                ]
                 tree.insert("", "end", values=formatted_row)
 
     except Exception as e:
