@@ -1,10 +1,51 @@
-def decode_rowlog(hex_data):
+import pyodbc
+
+def obtener_esquema_tabla(conexion, esquema, tabla):
+    """
+    Obtiene el esquema de la tabla desde la base de datos.
+    Retorna una lista de columnas con su nombre, tipo y longitud.
+    """
+    consulta = f"""
+    SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = '{esquema}' AND TABLE_NAME = '{tabla}';
+    """
+    cursor = conexion.cursor()
+    cursor.execute(consulta)
+    esquema_tabla = cursor.fetchall()
+    return [(fila.COLUMN_NAME, fila.DATA_TYPE, fila.CHARACTER_MAXIMUM_LENGTH) for fila in esquema_tabla]
+
+def try_decode(data):
+    """
+    Detecta automáticamente la codificación de los datos.
+    Decodifica en UTF-8 primero, pero si encuentra un patrón típico de UTF-16, cambia a UTF-16.
+    """
+    if all(data[i] == 0 for i in range(1, len(data), 2)):
+        try:
+            return data.decode('utf-16', errors='strict')
+        except UnicodeDecodeError:
+            pass
+
     try:
+        return data.decode('utf-8', errors='strict')
+    except UnicodeDecodeError:
+        return data.decode('utf-8', errors='replace')
+
+def decode_rowlog(conexion, esquema, tabla, hex_data):
+    """Decodifica un registro de RowLog Contents basado en el esquema de la tabla, con detección automática de codificación."""
+    try:
+        if hex_data.startswith("0x"):
+            hex_data = hex_data[2:]
+
+
+        esquema_tabla = obtener_esquema_tabla(conexion, esquema, tabla)
+
         binary_data = bytes.fromhex(hex_data)
 
         status_bits = binary_data[:2]
         print(f"Status Bits: {status_bits.hex()}")
 
+        # Leer Offset al Número de Columnas
         column_offset = int.from_bytes(binary_data[2:4], "little")
         print(f"Offset al Número de Columnas: {column_offset}")
 
@@ -37,24 +78,44 @@ def decode_rowlog(hex_data):
             var_offsets.append(var_offset)
         print(f"Offsets de Columnas Variables: {var_offsets}")
 
-        var_columns = []
-        for i in range(len(var_offsets)):
-            start = var_offsets[i - 1] if i > 0 else column_offset + 2 + null_bitmap_size + 2 + len(var_offsets) * 2
-            end = var_offsets[i]
-            if start > len(binary_data) or end > len(binary_data):
-                print("Error: Offsets fuera de los límites de los datos.")
-                return
-            var_columns.append(binary_data[start:end].decode('utf-8', errors='replace').strip())
+        if len(var_offsets) != var_column_count:
+            print("Error: Los offsets de columnas variables no coinciden con el número de columnas variables.")
+            return
 
-        if var_offsets:
-            start = var_offsets[-1]
-            if start < len(binary_data):
-                var_columns.append(binary_data[start:].decode('utf-8', errors='replace').strip())
-        print(f"Columnas de Longitud Variable: {var_columns}")
+        variable_data_start = offset_start + len(var_offsets) * 2
+
+        decoded_columns = {}
+        variable_columns = [col for col in esquema_tabla if col[1].lower() in ["varchar", "nvarchar", "text"]]
+
+        for idx, col in enumerate(variable_columns):
+            col_name, col_type, col_length = col
+            if idx < len(var_offsets):
+                start = var_offsets[idx - 1] if idx > 0 else variable_data_start
+                end = var_offsets[idx] if idx < len(var_offsets) else len(binary_data)
+                if start < end and end <= len(binary_data):
+                    decoded_value = try_decode(binary_data[start:end])
+                    decoded_columns[col_name] = decoded_value
+                    print(f"Columna '{col_name}': {decoded_value} (desde {start} hasta {end})")
+                else:
+                    print(f"Columna '{col_name}' tiene rangos inválidos (desde {start} hasta {end}).")
+            else:
+                print(f"Columna '{col_name}' no tiene un offset asignado y será ignorada.")
+
+        print(f"Decoded Columns: {decoded_columns}")
+        return decoded_columns
 
     except Exception as e:
         print(f"Error al procesar RowLog Contents: {e}")
 
-# Ejemplo
-rowlog_hex = "300011001D00000001604D2F0000000000050000030025002A003A0053656261737469E16E4EFAF1657A4167656E74652064652056656E746173"
-decode_rowlog(rowlog_hex)
+
+conexion = pyodbc.connect(
+    'DRIVER={ODBC Driver 18 for SQL Server};'
+    'SERVER=localhost;'
+    'DATABASE=EmpleadosDB;'
+    'UID=sa;'
+    'PWD=Pototo2005504;'
+    'TrustServerCertificate=yes;'
+)
+
+rowlog_hex = "30001100230000000120AA4400000000000500000300210026003800C16E67656C526F6A617353757065727669736F7220646520C1726561"
+decode_rowlog(conexion, "RecursosHumanos","Empleados", rowlog_hex)
