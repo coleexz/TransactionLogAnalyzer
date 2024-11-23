@@ -490,7 +490,19 @@ def definir_contenido_operation_details(frame, conexion, transaction_id, log_typ
             tree.column(col, anchor="w", width=200)
 
         for row in resultados:
-            tree.insert("", "end", values=row)
+            # Descomponer valores esperados (ahora 4 valores)
+            field, tipo, old_value_hex, new_value_hex = row
+
+            # Decodificar los valores si existen
+            old_value = decode_rowlog(conexion, field.split('.')[0], field.split('.')[1], old_value_hex) if old_value_hex else ""
+            new_value = decode_rowlog(conexion, field.split('.')[0], field.split('.')[1], new_value_hex) if new_value_hex else ""
+
+            # Obtener el valor específico para cada campo
+            old_value_specific = old_value.get(field.split('.')[-1], "") if old_value else ""
+            new_value_specific = new_value.get(field.split('.')[-1], "") if new_value else ""
+
+            # Insertar en la tabla con valores decodificados específicos
+            tree.insert("", "end", values=(field, tipo, old_value_specific, new_value_specific))
 
     except Exception as e:
         label = ttk.Label(frame, text=f"Error al obtener los detalles de la operación:\n{e}")
