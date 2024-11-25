@@ -1,7 +1,9 @@
 import pyodbc
 import struct
 from traceback import print_exc
-from datetime import datetime, timedelta
+import datetime
+
+
 
 def obtener_esquema_tabla(conexion, esquema, tabla):
     """
@@ -107,6 +109,22 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
                 exact_value = format(value, ".15g")
                 decoded_columns[col_name] = float(exact_value)
                 fixed_data_start += 8
+            elif col_type.lower() == "char":
+                # Determinar la longitud exacta
+                length_in_bytes = next((col[6] for col in esquema_tabla if col[0] == col_name), None)
+                if length_in_bytes is None:
+                    raise ValueError(f"No se pudo determinar la longitud de {col_name}")
+                value = binary_data[fixed_data_start:fixed_data_start + length_in_bytes].decode("latin1").strip()
+                decoded_columns[col_name] = value
+                fixed_data_start += length_in_bytes
+            elif col_type.lower() == "money":
+                value = struct.unpack("<q", binary_data[fixed_data_start:fixed_data_start + 8])[0] / 10000.0
+                decoded_columns[col_name] = value
+                fixed_data_start += 8
+            elif col_type.lower() == "smallmoney":
+                value = struct.unpack("<i", binary_data[fixed_data_start:fixed_data_start + 4])[0] / 10000.0
+                decoded_columns[col_name] = value
+                fixed_data_start += 4
             elif col_type.lower() == "nchar":
                 # Usar CHARACTER_OCTET_LENGTH para obtener longitud en bytes
                 length_in_bytes = next(
@@ -117,7 +135,6 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
                 value = binary_data[fixed_data_start:fixed_data_start + length_in_bytes].decode("utf-16le", errors="ignore")
                 decoded_columns[col_name] = value.strip()  # Remover espacios adicionales
                 fixed_data_start += length_in_bytes
-
             elif col_type.lower() == "binary":
                 length_in_bytes = next(
                     (col[6] for col in esquema_tabla if col[0] == col_name), None
@@ -128,6 +145,41 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
                 hex_representation = f"0x{value.hex().upper()}"
                 decoded_columns[col_name] = hex_representation
                 fixed_data_start += length_in_bytes
+                precision = col[4] or 0  # Usar precisión predeterminada si no está definida
+                scale_multiplier = 10 ** precision
+                raw_value = int.from_bytes(binary_data[fixed_data_start:fixed_data_start + 3], "little")
+                hours, remainder = divmod(raw_value // scale_multiplier, 3600)
+                minutes, seconds = divmod(remainder, 60)
+                fractional_seconds = (raw_value % scale_multiplier) / scale_multiplier
+                value = f"{hours:02}:{minutes:02}:{seconds:02}.{int(fractional_seconds * scale_multiplier)}"
+                decoded_columns[col_name] = value
+                fixed_data_start += 3
+            elif col_type.lower() == "rowversion":
+                value = binary_data[fixed_data_start:fixed_data_start + 8].hex().upper()
+                decoded_columns[col_name] = value
+                fixed_data_start += 8
+            elif col_type.lower() == "numeric":
+                precision = col[3]
+                scale = col[4]
+                if precision is None or scale is None:
+                    raise ValueError(f"Precisión o escala no definida para {col_name}")
+
+                if precision <= 9:
+                    bytes_for_value = 5
+                elif precision <= 19:
+                    bytes_for_value = 9
+                elif precision <= 28:
+                    bytes_for_value = 13
+                else:
+                    bytes_for_value = 17
+
+                raw_value = binary_data[fixed_data_start + 1:fixed_data_start + bytes_for_value]
+                is_negative = binary_data[fixed_data_start] & 0x80 != 0
+                value = int.from_bytes(raw_value, byteorder="little")
+                if is_negative:
+                    value = -value
+                decoded_columns[col_name] = value / (10 ** scale)
+                fixed_data_start += bytes_for_value
             elif col_type.lower() == "decimal":
                 if 1 <= precision <= 9:
                     bytes_for_value = 5
@@ -201,7 +253,7 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
 
 if __name__ == "__main__":
     conexion = pyodbc.connect("DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost,1433;UID=sa;PWD=Pototo2005504;DATABASE=EmpleadosDB")
-    hex_data = "0x30004C0040E201003930FFFFFFFFFFFFFFFF7FD00F49409B91048B0ABF054048006F006C0061002000200020002000200020000102030405060708090A0000000000000187D61200000000000B000000020065008500546578746F2064652070727565626154006500780074006F00200065006E00200055006E00690063006F0064006500"
-    resultado = decode_rowlog(conexion, "dbo", "TiposdeDatos", hex_data)
+    hex_data = "0x10004B00546578746F3132333420351CDCDF020000000061BC00013FB49600000000008E470B53BD1C037405EF0033B20000078CA392798E470BD3CEE5028E470B3C0000000000000007D70A000000"
+    resultado = decode_rowlog(conexion, "dbo", "TiposEspeciales", hex_data)
     print("Resultado decodificado:")
     print(resultado)
