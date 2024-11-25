@@ -10,7 +10,7 @@ def obtener_esquema_tabla(conexion, esquema, tabla):
     """
     consulta = f"""
     SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH,
-    NUMERIC_PRECISION, NUMERIC_SCALE
+    NUMERIC_PRECISION, NUMERIC_SCALE, CHARACTER_MAXIMUM_LENGTH, CHARACTER_OCTET_LENGTH
     FROM INFORMATION_SCHEMA.COLUMNS
     WHERE TABLE_SCHEMA = '{esquema}' AND TABLE_NAME = '{tabla}';
     """
@@ -18,7 +18,7 @@ def obtener_esquema_tabla(conexion, esquema, tabla):
     cursor.execute(consulta)
     esquema_tabla = cursor.fetchall()
     return [
-        (fila.COLUMN_NAME, fila.DATA_TYPE, fila.CHARACTER_MAXIMUM_LENGTH, fila.NUMERIC_PRECISION, fila.NUMERIC_SCALE)
+        (fila.COLUMN_NAME, fila.DATA_TYPE, fila.CHARACTER_MAXIMUM_LENGTH, fila.NUMERIC_PRECISION, fila.NUMERIC_SCALE, fila.CHARACTER_MAXIMUM_LENGTH, fila.CHARACTER_OCTET_LENGTH)
         for fila in esquema_tabla
     ]
 
@@ -79,7 +79,7 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
 
         # Decodificar columnas fijas
         for col in fixed_columns:
-            col_name, col_type, _, precision, scale = col
+            col_name, col_type, _, precision, scale, max_length, octet_length = col
 
             if col_type.lower() == "int":
                 value = int.from_bytes(binary_data[fixed_data_start:fixed_data_start + 4], "little")
@@ -98,23 +98,36 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
                 decoded_columns[col_name] = value
                 fixed_data_start += 8
             elif col_type.lower() == "real":
-                value = struct.unpack('<f', binary_data[offset:offset + 4])[0]
-                offset += 4
+                value = struct.unpack("<f", binary_data[fixed_data_start:fixed_data_start + 4])[0]
+                exact_value = format(value, ".7g")
+                decoded_columns[col_name] = float(exact_value)
+                fixed_data_start += 4
             elif col_type.lower() == "float":
-                value = struct.unpack('<d', binary_data[offset:offset + 8])[0]
-                offset += 8
-            if col_type.lower() == "char":
-                length = col[2]  # CHARACTER_MAXIMUM_LENGTH
-                value = binary_data[offset:offset + length].decode("ascii").rstrip()
-                offset += length
+                value = struct.unpack("<d", binary_data[fixed_data_start:fixed_data_start + 8])[0]
+                exact_value = format(value, ".15g")
+                decoded_columns[col_name] = float(exact_value)
+                fixed_data_start += 8
             elif col_type.lower() == "nchar":
-                length = col[2] * 2  # Cada carácter ocupa 2 bytes en NVARCHAR
-                value = binary_data[offset:offset + length].decode("utf-16").rstrip()
-                offset += length
-            if col_type.lower() == "binary":
-                length = col[2]  # CHARACTER_MAXIMUM_LENGTH
-                value = binary_data[offset:offset + length]
-                offset += length
+                # Usar CHARACTER_OCTET_LENGTH para obtener longitud en bytes
+                length_in_bytes = next(
+                    (col[6] for col in esquema_tabla if col[0] == col_name), None  # Col[6] corresponde a CHARACTER_OCTET_LENGTH
+                )
+                if length_in_bytes is None:
+                    raise ValueError(f"No se pudo determinar la longitud de {col_name}")
+                value = binary_data[fixed_data_start:fixed_data_start + length_in_bytes].decode("utf-16le", errors="ignore")
+                decoded_columns[col_name] = value.strip()  # Remover espacios adicionales
+                fixed_data_start += length_in_bytes
+
+            elif col_type.lower() == "binary":
+                length_in_bytes = next(
+                    (col[6] for col in esquema_tabla if col[0] == col_name), None
+                )
+                if length_in_bytes is None:
+                    raise ValueError(f"No se pudo determinar la longitud de {col_name}")
+                value = binary_data[fixed_data_start:fixed_data_start + length_in_bytes]
+                hex_representation = f"0x{value.hex().upper()}"
+                decoded_columns[col_name] = hex_representation
+                fixed_data_start += length_in_bytes
             elif col_type.lower() == "decimal":
                 if 1 <= precision <= 9:
                     bytes_for_value = 5
@@ -137,7 +150,7 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
                 fixed_data_start += 4
 
         relative_offsets: dict[int, int] = {}
-        for idx, (col_name, data_type, _, _, _) in enumerate(variable_columns):
+        for idx, (col_name, data_type, _, _, _,_,_) in enumerate(variable_columns):
             # Obtener el offset inicial y procesar las columnas variables
             column_offset = int.from_bytes(binary_data[2:4], "little")
             print(f"DEBUG: Offset inicial: {column_offset}")
@@ -188,7 +201,7 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
 
 if __name__ == "__main__":
     conexion = pyodbc.connect("DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost,1433;UID=sa;PWD=Pototo2005504;DATABASE=EmpleadosDB")
-    hex_data = "0x300015000100000001F0490200000000000A00000005000002002D0038004C6170746F702044656C6C20585053456C65637472F36E696361"
-    resultado = decode_rowlog(conexion, "Inventario", "Productos", hex_data)
+    hex_data = "0x30004C0040E201003930FFFFFFFFFFFFFFFF7FD00F49409B91048B0ABF054048006F006C0061002000200020002000200020000102030405060708090A0000000000000187D61200000000000B000000020065008500546578746F2064652070727565626154006500780074006F00200065006E00200055006E00690063006F0064006500"
+    resultado = decode_rowlog(conexion, "dbo", "TiposdeDatos", hex_data)
     print("Resultado decodificado:")
     print(resultado)
