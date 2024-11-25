@@ -109,6 +109,33 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
                 exact_value = format(value, ".15g")
                 decoded_columns[col_name] = float(exact_value)
                 fixed_data_start += 8
+            elif col_type.lower() == "decimal" or col_type.lower() == "numeric":
+                # Obtener precisión y escala desde el esquema
+                precision = col[3]
+                scale = col[4]
+                if precision is None or scale is None:
+                    raise ValueError(f"Precisión o escala no definida para {col_name}")
+
+                # Determinar la longitud según la precisión
+                if precision <= 9:
+                    bytes_for_value = 5
+                elif precision <= 19:
+                    bytes_for_value = 9
+                elif precision <= 28:
+                    bytes_for_value = 13
+                else:
+                    bytes_for_value = 17
+
+                # Leer los bytes binarios para el valor
+                raw_value = binary_data[fixed_data_start + 1:fixed_data_start + bytes_for_value]
+                is_negative = binary_data[fixed_data_start] & 0x80 != 0
+                value = int.from_bytes(raw_value, byteorder="little")
+                if is_negative:
+                    value = -value
+
+                # Aplicar escala
+                decoded_columns[col_name] = value / (10 ** scale)
+                fixed_data_start += bytes_for_value
             elif col_type.lower() == "char":
                 # Determinar la longitud exacta
                 length_in_bytes = next((col[6] for col in esquema_tabla if col[0] == col_name), None)
@@ -145,58 +172,10 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
                 hex_representation = f"0x{value.hex().upper()}"
                 decoded_columns[col_name] = hex_representation
                 fixed_data_start += length_in_bytes
-                precision = col[4] or 0  # Usar precisión predeterminada si no está definida
-                scale_multiplier = 10 ** precision
-                raw_value = int.from_bytes(binary_data[fixed_data_start:fixed_data_start + 3], "little")
-                hours, remainder = divmod(raw_value // scale_multiplier, 3600)
-                minutes, seconds = divmod(remainder, 60)
-                fractional_seconds = (raw_value % scale_multiplier) / scale_multiplier
-                value = f"{hours:02}:{minutes:02}:{seconds:02}.{int(fractional_seconds * scale_multiplier)}"
-                decoded_columns[col_name] = value
-                fixed_data_start += 3
             elif col_type.lower() == "rowversion":
                 value = binary_data[fixed_data_start:fixed_data_start + 8].hex().upper()
                 decoded_columns[col_name] = value
                 fixed_data_start += 8
-            elif col_type.lower() == "numeric":
-                precision = col[3]
-                scale = col[4]
-                if precision is None or scale is None:
-                    raise ValueError(f"Precisión o escala no definida para {col_name}")
-
-                if precision <= 9:
-                    bytes_for_value = 5
-                elif precision <= 19:
-                    bytes_for_value = 9
-                elif precision <= 28:
-                    bytes_for_value = 13
-                else:
-                    bytes_for_value = 17
-
-                raw_value = binary_data[fixed_data_start + 1:fixed_data_start + bytes_for_value]
-                is_negative = binary_data[fixed_data_start] & 0x80 != 0
-                value = int.from_bytes(raw_value, byteorder="little")
-                if is_negative:
-                    value = -value
-                decoded_columns[col_name] = value / (10 ** scale)
-                fixed_data_start += bytes_for_value
-            elif col_type.lower() == "decimal":
-                if 1 <= precision <= 9:
-                    bytes_for_value = 5
-                elif 10 <= precision <= 19:
-                    bytes_for_value = 9
-                elif 20 <= precision <= 28:
-                    bytes_for_value = 13
-                elif 29 <= precision <= 38:
-                    bytes_for_value = 17
-
-                raw_value = binary_data[fixed_data_start + 1:fixed_data_start + bytes_for_value]
-                is_negative = binary_data[fixed_data_start] & 0x80 != 0
-                value = int.from_bytes(raw_value, byteorder="little")
-                if is_negative:
-                    value = -value
-                decoded_columns[col_name] = value / (10 ** scale)
-                fixed_data_start += bytes_for_value
             else:
                 print(f"Tipo no manejado: {col_type}")
                 fixed_data_start += 4
