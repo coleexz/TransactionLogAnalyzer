@@ -1,5 +1,7 @@
 import pyodbc
+import struct
 from traceback import print_exc
+from datetime import datetime, timedelta
 
 def obtener_esquema_tabla(conexion, esquema, tabla):
     """
@@ -42,9 +44,21 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
     Decodifica un registro de RowLog Contents basado en el esquema de la tabla.
     """
     try:
-        if isinstance(hex_data, str) and hex_data.startswith("0x"):
-            hex_data = hex_data[2:]
+
+        # Normalizar hex_data según su tipo
+        if isinstance(hex_data, bytes):
+            hex_data = hex_data.hex()  # Convierte bytes a cadena hexadecimal
+        elif isinstance(hex_data, str) and hex_data.startswith("0x"):
+            hex_data = hex_data[2:]  # Elimina prefijo "0x"
+
+        # Validar que hex_data sea una cadena hexadecimal válida
+        if not all(c in "0123456789abcdefABCDEF" for c in hex_data):
+            raise ValueError(f"Datos no válidos: {hex_data}")
+
+        # Convertir a binario
         binary_data = bytes.fromhex(hex_data)
+        print(f"DEBUG: Datos binarios procesados: {binary_data}")
+
 
         print(f"DEBUG: Binary data completo: {binary_data}")
 
@@ -71,6 +85,36 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
                 value = int.from_bytes(binary_data[fixed_data_start:fixed_data_start + 4], "little")
                 decoded_columns[col_name] = value
                 fixed_data_start += 4
+            elif col_type.lower() == "smallint":
+                value = int.from_bytes(binary_data[fixed_data_start:fixed_data_start + 2], "little")
+                decoded_columns[col_name] = value
+                fixed_data_start += 2
+            elif col_type.lower() == "tinyint":
+                value = int.from_bytes(binary_data[fixed_data_start:fixed_data_start + 1], "little")
+                decoded_columns[col_name] = value
+                fixed_data_start += 1
+            elif col_type.lower() == "bigint":
+                value = int.from_bytes(binary_data[fixed_data_start:fixed_data_start + 8], "little")
+                decoded_columns[col_name] = value
+                fixed_data_start += 8
+            elif col_type.lower() == "real":
+                value = struct.unpack('<f', binary_data[offset:offset + 4])[0]
+                offset += 4
+            elif col_type.lower() == "float":
+                value = struct.unpack('<d', binary_data[offset:offset + 8])[0]
+                offset += 8
+            if col_type.lower() == "char":
+                length = col[2]  # CHARACTER_MAXIMUM_LENGTH
+                value = binary_data[offset:offset + length].decode("ascii").rstrip()
+                offset += length
+            elif col_type.lower() == "nchar":
+                length = col[2] * 2  # Cada carácter ocupa 2 bytes en NVARCHAR
+                value = binary_data[offset:offset + length].decode("utf-16").rstrip()
+                offset += length
+            if col_type.lower() == "binary":
+                length = col[2]  # CHARACTER_MAXIMUM_LENGTH
+                value = binary_data[offset:offset + length]
+                offset += length
             elif col_type.lower() == "decimal":
                 if 1 <= precision <= 9:
                     bytes_for_value = 5
