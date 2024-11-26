@@ -159,7 +159,9 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
                     if not (-693593 <= days <= 2958465):
                         raise ValueError(f"El valor de 'days' está fuera de rango: {days}")
                     value = datetime(1, 1, 1) + timedelta(days=days)
-                    decoded_columns[col_name] = value.date()
+
+                    formatted_date = value.strftime('%Y-%m-%d')
+                    decoded_columns[col_name] = formatted_date
                 except ValueError as e:
                     print(f"Error decodificando date para {col_name}: {e}")
                     decoded_columns[col_name] = None
@@ -197,15 +199,50 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
                     seconds = int(time_seconds % 60)
                     microseconds = int((time_seconds - int(time_seconds)) * 1e6)
 
-                    # Crear el objeto de tiempo
                     decoded_time = time(hour=hours, minute=minutes, second=seconds, microsecond=microseconds)
-                    decoded_columns[col_name] = decoded_time
+
+                    formatted_time = decoded_time.strftime('%H:%M:%S.%f')
+                    decoded_columns[col_name] = formatted_time
                 except Exception as e:
                     print(f"Error decodificando TIME para {col_name}: {e}")
                     decoded_columns[col_name] = None
                 finally:
                     # Asegurar que avanzamos el puntero, incluso si ocurre un error
                     fixed_data_start += tick_bytes
+            elif col_type.lower() == "datetime":
+                try:
+                    # Validar que haya al menos 8 bytes para DATETIME
+                    if len(binary_data[fixed_data_start:]) < 8:
+                        raise ValueError(f"Se requieren al menos 8 bytes para DATETIME, se encontraron {len(binary_data[fixed_data_start:])} bytes.")
+
+                    # Leer días y ticks
+                    ticks = int.from_bytes(binary_data[fixed_data_start:fixed_data_start + 4], "little")
+                    days = int.from_bytes(binary_data[fixed_data_start + 4:fixed_data_start + 8], "little")
+                    print(f"DEBUG: Días: {days}, Ticks: {ticks}")
+
+                    # Validar rango de días
+                    if not (0 <= days <= 366000):  # Asegurar un rango razonable
+                        raise ValueError(f"Días fuera de rango: {days}")
+
+                    # Calcular la fecha y hora
+                    date = datetime(1900, 1, 1) + timedelta(days=days)
+                    time_seconds = ticks / 300  # Ticks son 1/300 de segundo
+                    hours = int(time_seconds // 3600)
+                    minutes = int((time_seconds % 3600) // 60)
+                    seconds = int(time_seconds % 60)
+                    milliseconds = int((time_seconds - int(time_seconds)) * 1000)
+
+                    # Crear el objeto datetime
+                    decoded_datetime = datetime.combine(date, datetime.min.time()) + timedelta(
+                        hours=hours, minutes=minutes, seconds=seconds, milliseconds=milliseconds
+                    )
+                    formatted_datetime = decoded_datetime.strftime('%Y-%m-%d %H:%M:%S')
+                    decoded_columns[col_name] = formatted_datetime
+                except Exception as e:
+                    print(f"Error decodificando DATETIME para {col_name}: {e}")
+                    decoded_columns[col_name] = None
+                finally:
+                    fixed_data_start += 8  # Avanzar 8 bytes procesados para DATETIME
 
             elif col_type.lower() == "smalldatetime":
                 minutes = int.from_bytes(binary_data[fixed_data_start:fixed_data_start + 2], "little")
