@@ -2,7 +2,7 @@ import pyodbc
 import struct
 from traceback import print_exc
 import datetime
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 
 
 
@@ -13,7 +13,7 @@ def obtener_esquema_tabla(conexion, esquema, tabla):
     """
     consulta = f"""
     SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH,
-    NUMERIC_PRECISION, NUMERIC_SCALE, CHARACTER_MAXIMUM_LENGTH, CHARACTER_OCTET_LENGTH
+    NUMERIC_PRECISION, DATETIME_PRECISION, NUMERIC_SCALE, CHARACTER_MAXIMUM_LENGTH, CHARACTER_OCTET_LENGTH
     FROM INFORMATION_SCHEMA.COLUMNS
     WHERE TABLE_SCHEMA = '{esquema}' AND TABLE_NAME = '{tabla}';
     """
@@ -21,7 +21,7 @@ def obtener_esquema_tabla(conexion, esquema, tabla):
     cursor.execute(consulta)
     esquema_tabla = cursor.fetchall()
     return [
-        (fila.COLUMN_NAME, fila.DATA_TYPE, fila.CHARACTER_MAXIMUM_LENGTH, fila.NUMERIC_PRECISION, fila.NUMERIC_SCALE, fila.CHARACTER_MAXIMUM_LENGTH, fila.CHARACTER_OCTET_LENGTH)
+        (fila.COLUMN_NAME, fila.DATA_TYPE, fila.CHARACTER_MAXIMUM_LENGTH, fila.NUMERIC_PRECISION, fila.DATETIME_PRECISION, fila.NUMERIC_SCALE, fila.CHARACTER_MAXIMUM_LENGTH, fila.CHARACTER_OCTET_LENGTH)
         for fila in esquema_tabla
     ]
 
@@ -82,7 +82,7 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
 
         # Decodificar columnas fijas
         for col in fixed_columns:
-            col_name, col_type, _, precision, scale, max_length, octet_length = col
+            col_name, col_type, _, precision, datetimeprecision,  scale, max_length, octet_length = col
 
             if col_type.lower() == "int":
                 value = int.from_bytes(binary_data[fixed_data_start:fixed_data_start + 4], "little")
@@ -113,7 +113,7 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
             elif col_type.lower() == "decimal" or col_type.lower() == "numeric":
                 # Obtener precisión y escala desde el esquema
                 precision = col[3]
-                scale = col[4]
+                scale = col[5]
                 if precision is None or scale is None:
                     raise ValueError(f"Precisión o escala no definida para {col_name}")
 
@@ -165,6 +165,48 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
                     decoded_columns[col_name] = None
                 finally:
                     fixed_data_start += 3
+            elif col_type.lower() == "time":
+                tick_bytes = 3  # Valor por defecto si algo falla
+                try:
+                    print('datatimeprecision:', datetimeprecision)
+
+                    # Validar si datetimeprecision es válido
+                    if datetimeprecision is None:
+                        raise ValueError(f"No se pudo obtener la precisión para la columna {col_name}")
+
+                    # Calcular el número de bytes necesarios según la precisión
+                    tick_bytes = 3 + (datetimeprecision // 2)
+                    if len(binary_data[fixed_data_start:]) < tick_bytes:
+                        raise ValueError(f"Se requieren al menos {tick_bytes} bytes para TIME con precisión {datetimeprecision}")
+
+                    # Extraer los ticks desde los bytes
+                    ticks = int.from_bytes(binary_data[fixed_data_start:fixed_data_start + tick_bytes], "little")
+                    print(f"DEBUG: Ticks antes de escalar: {ticks}")
+
+                    # Ajustar los ticks a precisión máxima usando datetimeprecision
+                    scale_factor = 10 ** (7 - datetimeprecision)  # Escalar a la precisión máxima
+                    ticks *= scale_factor
+
+                    # Convertir ticks a segundos
+                    time_seconds = ticks / 10**7  # Ticks están en 1/10^7 segundos
+                    print(f"DEBUG: Segundos calculados: {time_seconds}")
+
+                    # Calcular horas, minutos, segundos y microsegundos
+                    hours = int(time_seconds // 3600)
+                    minutes = int((time_seconds % 3600) // 60)
+                    seconds = int(time_seconds % 60)
+                    microseconds = int((time_seconds - int(time_seconds)) * 1e6)
+
+                    # Crear el objeto de tiempo
+                    decoded_time = time(hour=hours, minute=minutes, second=seconds, microsecond=microseconds)
+                    decoded_columns[col_name] = decoded_time
+                except Exception as e:
+                    print(f"Error decodificando TIME para {col_name}: {e}")
+                    decoded_columns[col_name] = None
+                finally:
+                    # Asegurar que avanzamos el puntero, incluso si ocurre un error
+                    fixed_data_start += tick_bytes
+
             elif col_type.lower() == "smalldatetime":
                 minutes = int.from_bytes(binary_data[fixed_data_start:fixed_data_start + 2], "little")
                 days = int.from_bytes(binary_data[fixed_data_start + 2:fixed_data_start + 4], "little")
