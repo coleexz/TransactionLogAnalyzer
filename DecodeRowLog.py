@@ -232,7 +232,7 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
 
 if __name__ == "__main__":
     conexion = pyodbc.connect("DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost,1433;UID=sa;PWD=Pototo2005504;DATABASE=EmpleadosDB")
-    hex_data = "0x10004B00546578746F3132333420351CDCDF020000000061BC00013FB49600000000008E470B53BD1C037405EF0033B20000078CA392798E470BD3CEE5028E470B3C0000000000000007D70A000000"
-    resultado = decode_rowlog(conexion, "dbo", "TiposEspeciales", hex_data)
+    hex_data = "0x100008009F05FFFF010000"
+    resultado = decode_rowlog(conexion, "dbo", "TablaSmallDateTime", hex_data)
     print("Resultado decodificado:")
     print(resultado)
