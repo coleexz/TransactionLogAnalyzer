@@ -165,63 +165,6 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
                     decoded_columns[col_name] = None
                 finally:
                     fixed_data_start += 3
-            elif col_type.lower() == "datetime":
-                try:
-                    ticks = int.from_bytes(binary_data[fixed_data_start + 0:fixed_data_start + 4], "little")
-                    days = int.from_bytes(binary_data[fixed_data_start+4 :fixed_data_start + 8], "little")
-                    if not (0 <= days <= 366000):
-                        raise ValueError(f"Días fuera de rango: {days}")
-                    date = datetime(1900, 1, 1) + timedelta(days=days)
-                    time_seconds = ticks / 300
-                    hours = int(time_seconds // 3600)
-                    minutes = int((time_seconds % 3600) // 60)
-                    seconds = int(time_seconds % 60)
-                    milliseconds = int((time_seconds - int(time_seconds)) * 1000)
-
-                    value = datetime.combine(date, datetime.min.time()) + timedelta(
-                        hours=hours, minutes=minutes, seconds=seconds, milliseconds=milliseconds
-                    )
-                    decoded_columns[col_name] = value
-                except ValueError as e:
-                    print(f"Error decodificando datetime para {col_name}: {e}")
-                    decoded_columns[col_name] = None
-                finally:
-                    fixed_data_start += 8
-                try:
-                    # Definir el tamaño según la precisión
-                    precision = 7  # Precisión máxima
-                    tick_bytes = 3 + (precision // 2)  # Ticks ocupan entre 3 y 5 bytes
-                    total_bytes = tick_bytes + 3  # Total bytes = Ticks + Días
-
-                    # Leer ticks y días
-                    ticks = int.from_bytes(binary_data[fixed_data_start:fixed_data_start + tick_bytes], "little")
-                    days = int.from_bytes(binary_data[fixed_data_start + tick_bytes:fixed_data_start + total_bytes], "little")
-                    print(f"DEBUG: Ticks: {ticks}, Días: {days}")
-
-                    # Validar rango de días
-                    if not (-3652059 <= days <= 3652059):  # ±10,000 años desde el 0001-01-01
-                        raise ValueError(f"Días fuera de rango: {days}")
-
-                    # Calcular la fecha
-                    date = datetime(1, 1, 1) + timedelta(days=days)
-
-                    # Calcular el tiempo
-                    time_seconds = ticks / (10 ** precision)  # Ticks a segundos
-                    hours = int(time_seconds // 3600)
-                    minutes = int((time_seconds % 3600) // 60)
-                    seconds = int(time_seconds % 60)
-                    microseconds = int((time_seconds - int(time_seconds)) * 1e6)
-
-                    # Combinar fecha y hora
-                    value = datetime.combine(date, datetime.min.time()) + timedelta(
-                        hours=hours, minutes=minutes, seconds=seconds, microseconds=microseconds
-                    )
-                    decoded_columns[col_name] = value
-                except ValueError as e:
-                    print(f"Error decodificando datetime2 para {col_name}: {e}")
-                    decoded_columns[col_name] = None
-                finally:
-                    fixed_data_start += total_bytes  # Saltar los bytes procesados
             elif col_type.lower() == "smalldatetime":
                 minutes = int.from_bytes(binary_data[fixed_data_start:fixed_data_start + 2], "little")
                 days = int.from_bytes(binary_data[fixed_data_start + 2:fixed_data_start + 4], "little")
@@ -318,7 +261,7 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
 
 if __name__ == "__main__":
     conexion = pyodbc.connect("DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost,1433;UID=sa;PWD=Pototo2005504;DATABASE=EmpleadosDB")
-    hex_data = "0x100008009F05FFFF010000"
-    resultado = decode_rowlog(conexion, "dbo", "TablaSmallDateTime", hex_data)
+    hex_data = "0x10004B00546578746F3132333420351CDCDF020000000061BC00013FB49600000000008E470B53BD1C037405EF0033B20000078CA392798E470BD3CEE5028E470B3C0000000000000007D70A000000"
+    resultado = decode_rowlog(conexion, "dbo", "TiposEspeciales", hex_data)
     print("Resultado decodificado:")
     print(resultado)
