@@ -12,8 +12,7 @@ def obtener_esquema_tabla(conexion, esquema, tabla):
     Retorna una lista de columnas con su nombre, tipo, longitud, precisión y escala.
     """
     consulta = f"""
-    SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH,
-    NUMERIC_PRECISION, DATETIME_PRECISION, NUMERIC_SCALE, CHARACTER_MAXIMUM_LENGTH, CHARACTER_OCTET_LENGTH
+    SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, DATETIME_PRECISION, NUMERIC_SCALE, CHARACTER_MAXIMUM_LENGTH, CHARACTER_OCTET_LENGTH
     FROM INFORMATION_SCHEMA.COLUMNS
     WHERE TABLE_SCHEMA = '{esquema}' AND TABLE_NAME = '{tabla}';
     """
@@ -60,14 +59,9 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
 
         # Convertir a binario
         binary_data = bytes.fromhex(hex_data)
-        print(f"DEBUG: Datos binarios procesados: {binary_data}")
-
-
-        print(f"DEBUG: Binary data completo: {binary_data}")
 
         # Obtener esquema de la tabla
         esquema_tabla = obtener_esquema_tabla(conexion, esquema, tabla)
-        print(f"DEBUG: Esquema de tabla: {esquema_tabla}")
 
         # Separar columnas fijas y variables
         fixed_columns = [
@@ -82,6 +76,7 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
 
         # Decodificar columnas fijas
         for col in fixed_columns:
+            #COLUMN_NAME, DATA_TYPE,  NUMERIC_PRECISION, DATETIME_PRECISION, NUMERIC_SCALE, CHARACTER_MAXIMUM_LENGTH, CHARACTER_OCTET_LENGTH
             col_name, col_type, _, precision, datetimeprecision,  scale, max_length, octet_length = col
 
             if col_type.lower() == "int":
@@ -170,8 +165,6 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
             elif col_type.lower() == "time":
                 tick_bytes = 3  # Valor por defecto si algo falla
                 try:
-                    print('datatimeprecision:', datetimeprecision)
-
                     # Validar si datetimeprecision es válido
                     if datetimeprecision is None:
                         raise ValueError(f"No se pudo obtener la precisión para la columna {col_name}")
@@ -183,7 +176,6 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
 
                     # Extraer los ticks desde los bytes
                     ticks = int.from_bytes(binary_data[fixed_data_start:fixed_data_start + tick_bytes], "little")
-                    print(f"DEBUG: Ticks antes de escalar: {ticks}")
 
                     # Ajustar los ticks a precisión máxima usando datetimeprecision
                     scale_factor = 10 ** (7 - datetimeprecision)  # Escalar a la precisión máxima
@@ -191,7 +183,6 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
 
                     # Convertir ticks a segundos
                     time_seconds = ticks / 10**7  # Ticks están en 1/10^7 segundos
-                    print(f"DEBUG: Segundos calculados: {time_seconds}")
 
                     # Calcular horas, minutos, segundos y microsegundos
                     hours = int(time_seconds // 3600)
@@ -218,7 +209,6 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
                     # Leer días y ticks
                     ticks = int.from_bytes(binary_data[fixed_data_start:fixed_data_start + 4], "little")
                     days = int.from_bytes(binary_data[fixed_data_start + 4:fixed_data_start + 8], "little")
-                    print(f"DEBUG: Días: {days}, Ticks: {ticks}")
 
                     # Validar rango de días
                     if not (0 <= days <= 366000):  # Asegurar un rango razonable
@@ -289,27 +279,19 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
                 fixed_data_start += 4
 
         relative_offsets: dict[int, int] = {}
-        for idx, (col_name, data_type, _, _, _,_,_) in enumerate(variable_columns):
+        for idx, (col_name, data_type, _, _, _,_,_,_) in enumerate(variable_columns):
             # Obtener el offset inicial y procesar las columnas variables
             column_offset = int.from_bytes(binary_data[2:4], "little")
-            print(f"DEBUG: Offset inicial: {column_offset}")
-
             total_columns = int.from_bytes(binary_data[column_offset:column_offset + 2], "little")
-            print(f"DEBUG: Total columnas: {total_columns}")
 
             null_bitmap_size = (total_columns + 7) // 8
             variable_column_count_offset = column_offset + 2 + null_bitmap_size
             variable_column_count = int.from_bytes(
                 binary_data[variable_column_count_offset:variable_column_count_offset + 2], "little"
             )
-            print(f"DEBUG: Variable column count: {variable_column_count}")
-
 
             variable_data_start = (variable_column_count_offset + 2 + variable_column_count * 2)
             offset_start = variable_column_count_offset + 2
-            print(f"DEBUG: Offset start: {offset_start}")
-
-            # Leer offsets relativos
 
             for i in range(variable_column_count):
                 s = offset_start + (i * 2)
@@ -318,14 +300,10 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
                 )
                 relative_offsets[i]= offset
 
-            print(f"DEBUG: Offsets relativos leídos: {relative_offsets}")
 
             last_offset = relative_offsets.get(idx-1)
             start = last_offset if last_offset else variable_data_start
             end = relative_offsets.get(idx) if idx < len(relative_offsets) else len(binary_data)
-
-            print("Start: ", start)
-            print("End: ", end)
 
             chunk = binary_data[start:end]
             val = try_decode(chunk)
@@ -340,7 +318,7 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
 
 if __name__ == "__main__":
     conexion = pyodbc.connect("DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost,1433;UID=sa;PWD=Pototo2005504;DATABASE=EmpleadosDB")
-    hex_data = "0x10004B00546578746F3132333420351CDCDF020000000061BC00013FB49600000000008E470B53BD1C037405EF0033B20000078CA392798E470BD3CEE5028E470B3C0000000000000007D70A000000"
-    resultado = decode_rowlog(conexion, "dbo", "TiposEspeciales", hex_data)
+    hex_data = "0x30002500010000001C016BAA4400000000008F470B00000000004044401A18030035B20000080000020042007C004A00750061006E0020005000E900720065007A0045006D0070006C006500610064006F002000640065007300740061006300610064006F00200065006E002000730075002000E100720065006100"
+    resultado = decode_rowlog(conexion, "EJEMPLO", "EjemploTiposDeDatos", hex_data)
     print("Resultado decodificado:")
     print(resultado)
