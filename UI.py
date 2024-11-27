@@ -5,10 +5,11 @@ from tkinter import ttk, messagebox
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from ConnectDB import conectar_sqlserver
+from ConnectDB import conexion_windows
 from tkcalendar import DateEntry
 from datetime import datetime
 from DecodeRowLog import decode_rowlog
-
+import platform
 
 
 class ReloadOnChangeHandler(FileSystemEventHandler):
@@ -34,6 +35,26 @@ def limpiar_interfaz():
     for widget in ventana.winfo_children():
         widget.destroy()
 
+def mostrar_interfaz_seleccion_tipo_conexion():
+    limpiar_interfaz()
+    ventana.geometry("400x200")
+    ventana.configure(bg="#FFFFFF")
+    ventana.title("Seleccionar tipo de conexión")
+
+    ttk.Label(ventana, text="Seleccione el tipo de conexión:").grid(row=0, column=0, columnspan=2, pady=20, padx=10)
+
+    def seleccionar_autenticacion(tipo):
+        global tipo_autenticacion
+        tipo_autenticacion = tipo
+        limpiar_interfaz()
+        mostrar_interfaz_conexion()
+
+    ttk.Button(ventana, text="SQL Server Authentication", 
+               command=lambda: seleccionar_autenticacion("sql")).grid(row=1, column=0, padx=10, pady=5)
+    ttk.Button(ventana, text="Windows Authentication", 
+               command=lambda: seleccionar_autenticacion("windows")).grid(row=1, column=1, padx=10, pady=5)
+
+
 def mostrar_interfaz_conexion():
     limpiar_interfaz()
     ventana.geometry("550x400")
@@ -51,18 +72,27 @@ def mostrar_interfaz_conexion():
     entry_port.insert(0, "1433")
     entry_port.grid(row=1, column=1, padx=10, pady=5)
 
-    ttk.Label(ventana, text="User:").grid(row=2, column=0, sticky="w", padx=10, pady=5)
-    entry_user = ttk.Entry(ventana, width=30)
-    entry_user.insert(0, "sa")
-    entry_user.grid(row=2, column=1, padx=10, pady=5)
+    if tipo_autenticacion == "sql":
+        ttk.Label(ventana, text="User:").grid(row=2, column=0, sticky="w", padx=10, pady=5)
+        entry_user = ttk.Entry(ventana, width=30)
+        entry_user.insert(0, "sa")
+        entry_user.grid(row=2, column=1, padx=10, pady=5)
 
-    ttk.Label(ventana, text="Password:").grid(row=3, column=0, sticky="w", padx=10, pady=5)
-    entry_password = ttk.Entry(ventana, show="*", width=30)
-    entry_password.grid(row=3, column=1, padx=10, pady=5)
-    entry_password.insert(0, "Pototo2005504")
+        ttk.Label(ventana, text="Password:").grid(row=3, column=0, sticky="w", padx=10, pady=5)
+        entry_password = ttk.Entry(ventana, show="*", width=30)
+        entry_password.grid(row=3, column=1, padx=10, pady=5)
+        entry_password.insert(0, "Pototo2005504")
 
-    btn_conectar = ttk.Button(ventana, text="Conectarse", command=conectar)
+    def conectar_segun_tipo():
+        # Llama a la función conectar con el tipo de autenticación seleccionado
+        conectar(tipo_autenticacion)
+
+    btn_conectar = ttk.Button(ventana, text="Conectarse", command=conectar_segun_tipo)
     btn_conectar.grid(row=4, column=0, columnspan=2, pady=20)
+
+    btn_volver = ttk.Button(ventana, text="Volver", command=mostrar_interfaz_seleccion_tipo_conexion)
+    btn_volver.grid(row=5, column=0, columnspan=2, pady=20)
+
 
 def mostrar_interfaz_popup_bases(bases_datos, conexion):
     limpiar_interfaz()
@@ -88,6 +118,8 @@ def mostrar_interfaz_popup_bases(bases_datos, conexion):
 
 
 
+import platform
+
 def mostrar_interfaz_transacciones(conexion):
     def validar_fecha(fecha):
         try:
@@ -112,7 +144,14 @@ def mostrar_interfaz_transacciones(conexion):
             messagebox.showerror("Error", "Selecciona un archivo de respaldo (.bak).")
             return
 
-        backup_file_path = f"/var/opt/mssql/data/{backup_file}" if backup_file else None
+        # Definir la ruta del archivo .bak dependiendo del sistema operativo
+        if platform.system() == "Darwin":  # macOS
+            backup_file_path = f"/Users/coleexz/Documents/docker_shared/{backup_file}" if backup_file else None
+        elif platform.system() == "Windows":
+            backup_file_path = f"C:\\Respaldos\\{backup_file}" if backup_file else None
+        else:
+            messagebox.showerror("Error", "Sistema operativo no soportado para respaldos.")
+            return
 
         actualizar_transacciones(
             conexion,
@@ -174,15 +213,22 @@ def mostrar_interfaz_transacciones(conexion):
     entry_to.insert(0, datetime.now().strftime("%Y-%m-%d"))
     entry_to.grid(row=0, column=8, padx=5)
 
-    # Listar archivos .bak en el directorio deseado
-    directorio_respaldo = "/Users/coleexz/Documents/docker_shared"
+    # Detectar sistema operativo y listar archivos .bak
+    if platform.system() == "Darwin":  # macOS
+        directorio_respaldo = "/Users/coleexz/Documents/docker_shared"
+    elif platform.system() == "Windows":
+        directorio_respaldo = "C:\\Respaldos"
+    else:
+        messagebox.showerror("Error", "Sistema operativo no soportado para listar respaldos.")
+        return
+
     archivos_bak = listar_archivos_bak(directorio_respaldo)
     combobox_backup["values"] = archivos_bak
 
     btn_apply = ttk.Button(filtros_frame, text="Apply", command=aplicar_filtros)
     btn_apply.grid(row=0, column=11, padx=3)
 
-    btn_desconectar = ttk.Button(filtros_frame, text="Desconectar", command=mostrar_interfaz_conexion)
+    btn_desconectar = ttk.Button(filtros_frame, text="Desconectar", command=mostrar_interfaz_seleccion_tipo_conexion)
     btn_desconectar.grid(row=0, column=12, padx=3)
 
     columnas = [" ", "Operation", "Schema", "Object", "User", "Begin time", "End time", "Transaction ID", "LSN"]
@@ -197,7 +243,7 @@ def mostrar_interfaz_transacciones(conexion):
         conexion,
         tree.item(tree.selection())["values"],
         log_type_var.get(),
-        backup_path=f"/var/opt/mssql/data/{combobox_backup.get()}" if combobox_backup.get() else None
+        backup_path=f"{directorio_respaldo}\\{combobox_backup.get()}" if combobox_backup.get() else None
     ))
 
 
@@ -1145,19 +1191,30 @@ def definir_contenido_transaction_info(frame, conexion, transaction_id, operatio
 
 #=======================================================================================================
 
-
-def conectar():
+def conectar(tipo_autenticacion):
     servidor = entry_server.get()
     puerto = entry_port.get()
-    usuario = entry_user.get()
-    contrasena = entry_password.get()
-    conexion = conectar_sqlserver(servidor, puerto, usuario, contrasena, "master")
 
+    # Verificar el tipo de autenticación
+    if tipo_autenticacion == "sql":
+        usuario = entry_user.get()
+        contrasena = entry_password.get()
+        conexion = conectar_sqlserver(servidor, puerto, usuario, contrasena, "master")
+    elif tipo_autenticacion == "windows":
+        conexion = conexion_windows(servidor, puerto, "master")
+    else:
+        messagebox.showerror("Error", "Tipo de autenticación no válido")
+        return
+
+    # Verificar si la conexión fue exitosa
     if conexion:
-        cursor = conexion.cursor()
-        cursor.execute("SELECT name FROM sys.databases;")
-        bases_datos = [row[0] for row in cursor.fetchall()]
-        mostrar_interfaz_popup_bases(bases_datos, conexion)
+        try:
+            cursor = conexion.cursor()
+            cursor.execute("SELECT name FROM sys.databases;")
+            bases_datos = [row[0] for row in cursor.fetchall()]
+            mostrar_interfaz_popup_bases(bases_datos, conexion)
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo obtener las bases de datos: {e}")
     else:
         messagebox.showerror("Error", "No se pudo establecer la conexión")
 
@@ -1172,7 +1229,7 @@ def start_watchdog():
 
     try:
         configurar_estilos()
-        mostrar_interfaz_conexion()
+        mostrar_interfaz_seleccion_tipo_conexion()
         ventana.mainloop()
     except KeyboardInterrupt:
         observer.stop()
