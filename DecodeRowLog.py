@@ -63,6 +63,8 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
         # Obtener esquema de la tabla
         esquema_tabla = obtener_esquema_tabla(conexion, esquema, tabla)
 
+        print(esquema_tabla)
+
         # Separar columnas fijas y variables
         fixed_columns = [
             col for col in esquema_tabla if col[1].lower() not in ["varchar", "nvarchar", "text"]
@@ -270,6 +272,11 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
                 hex_representation = f"0x{value.hex().upper()}"
                 decoded_columns[col_name] = hex_representation
                 fixed_data_start += length_in_bytes
+            elif col_type.lower() == "bit":
+                # Leer un byte del registro (aunque solo se usa un bit)
+                bit_value = binary_data[fixed_data_start] & 1  # Extraer el primer bit
+                decoded_columns[col_name] = bool(bit_value)   # Convertir a True/False
+                fixed_data_start += 1  # Avanzar un byte
             elif col_type.lower() == "rowversion":
                 value = binary_data[fixed_data_start:fixed_data_start + 8].hex().upper()
                 decoded_columns[col_name] = value
@@ -317,8 +324,8 @@ def decode_rowlog(conexion, esquema, tabla, hex_data):
         return None
 
 if __name__ == "__main__":
-    conexion = pyodbc.connect("DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost,1433;UID=sa;PWD=Pototo2005504;DATABASE=EmpleadosDB")
-    hex_data = "0x30002500010000001C016BAA4400000000008F470B00000000004044401A18030035B20000080000020042007C004A00750061006E0020005000E900720065007A0045006D0070006C006500610064006F002000640065007300740061006300610064006F00200065006E002000730075002000E100720065006100"
-    resultado = decode_rowlog(conexion, "EJEMPLO", "EjemploTiposDeDatos", hex_data)
+    conexion = pyodbc.connect("DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost,1433;UID=sa;PWD=Pototo2005504;DATABASE=ExampleDB")
+    hex_data = "0x30001500080000000160EC530000000000EF410B0108000004002C00380068007C00470072006100630065004D0069006C006C0065007200670072006100630065002E006D0069006C006C006500720040006500780061006D0070006C0065002E0063006F006D004100630063006F0075006E00740061006E007400"
+    resultado = decode_rowlog(conexion, "ExampleSchema", "Employees", hex_data)
     print("Resultado decodificado:")
     print(resultado)
